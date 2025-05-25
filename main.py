@@ -1865,6 +1865,7 @@ class YouTubeAPIService:
             
             # Use yt-dlp for search to avoid proxy issues
             options = clean_ytdl_options()
+            options["proxy"] = get_rotating_proxy()
             options.update({
                 "quiet": True,
                 "no_warnings": True,
@@ -1928,6 +1929,7 @@ class YouTubeAPIService:
             
             # Use yt-dlp to check if the URL exists
             options = clean_ytdl_options()
+            options["proxy"] = get_rotating_proxy()
             options.update({
                 "skip_download": True,
                 "extract_flat": True,
@@ -1969,7 +1971,7 @@ class YouTubeAPIService:
             
             # Use yt-dlp to get video details
             options = clean_ytdl_options()
-            
+            options["proxy"] = get_rotating_proxy()
             with yt_dlp.YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=False)
                 
@@ -2031,6 +2033,7 @@ class YouTubeAPIService:
             
             format_str = "best[height<=720]" if is_video else "bestaudio"
             options = clean_ytdl_options()
+            options["proxy"] = get_rotating_proxy()
             options.update({
                 "format": format_str,
                 "skip_download": True,
@@ -2263,7 +2266,9 @@ def stream_media(stream_id):
                 "Range": request.headers.get("Range", "bytes=0-")
             }
             
-            with httpx.stream("GET", url, headers=headers, timeout=30) as response:
+            proxy = get_rotating_proxy()
+            proxies = {"all": f"http://{proxy}"} if proxy else None
+            with httpx.stream("GET", url, headers=headers, proxies=proxies, timeout=30) as response:
                 # Forward content type and other headers
                 yield b""
                 
