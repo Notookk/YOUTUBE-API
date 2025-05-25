@@ -1619,9 +1619,27 @@ def get_rotating_proxy():
 def get_random_user_agent():
     """Get a random user agent to avoid detection"""
     return random.choice(USER_AGENTS)
-    
-def get_random_headers():
-    return {
+
+from playwright.sync_api import sync_playwright
+
+def get_youtube_cookies_playwright(proxy=None):
+    with sync_playwright() as p:
+        browser_args = []
+        if proxy:
+            browser_args.append(f'--proxy-server={proxy}')
+        browser = p.chromium.launch(headless=True, args=browser_args)
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto('https://www.youtube.com', timeout=30000)
+        page.wait_for_timeout(5000)  # Let the page load and cookies set
+        cookies = context.cookies()
+        browser.close()
+        cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
+        return cookie_str   
+
+
+def get_random_headers(extra_cookie=None):
+    headers = {
         "User-Agent": get_random_user_agent(),
         "Accept": random.choice([
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
@@ -1637,6 +1655,9 @@ def get_random_headers():
         "Sec-Fetch-User": "?1",
         "Referer": "https://www.google.com/"
     }
+    if extra_cookie:
+        headers["Cookie"] = extra_cookie
+    return headers
 
 
 def add_jitter(seconds=1):
