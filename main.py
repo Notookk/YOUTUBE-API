@@ -136,15 +136,16 @@ USER_AGENTS = [
 
 # Proxy rotation (if needed)
 import itertools
-# ...
-# Read proxies from file
 try:
     with open('attached_assets/PROXY.txt') as f:
         PROXY_LIST = [line.strip() for line in f if line.strip()]
 except Exception:
     PROXY_LIST = []
-# Create a cycling iterator for proxies
 proxy_cycle = itertools.cycle(PROXY_LIST)
+def get_rotating_proxy():
+    if not PROXY_LIST:
+        return None
+    return next(proxy_cycle)
 
 # HTML templates
 INDEX_HTML = """<!DOCTYPE html>
