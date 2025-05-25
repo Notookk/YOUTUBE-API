@@ -1,0 +1,14 @@
+email-validator
+flask-cors
+flask
+flask-sqlalchemy
+gunicorn
+httpx
+psycopg2-binary
+youtube-search-python
+yt-dlp
+flask-limiter
+trafilatura
+pymongo
+flask-login
+flask-wtf
