@@ -135,7 +135,16 @@ USER_AGENTS = [
 ]
 
 # Proxy rotation (if needed)
-PROXY_LIST = os.environ.get("PROXY_LIST", "").split(",") if os.environ.get("PROXY_LIST") else []
+import itertools
+# ...
+# Read proxies from file
+try:
+    with open('attached_assets/PROXY.txt') as f:
+        PROXY_LIST = [line.strip() for line in f if line.strip()]
+except Exception:
+    PROXY_LIST = []
+# Create a cycling iterator for proxies
+proxy_cycle = itertools.cycle(PROXY_LIST)
 
 # HTML templates
 INDEX_HTML = """<!DOCTYPE html>
@@ -1600,11 +1609,11 @@ ADMIN_HTML = """<!DOCTYPE html>
 </html>
 """
 
-def get_random_proxy():
-    """Get a random proxy from the list to avoid IP bans"""
+def get_rotating_proxy():
+    """Rotate through the proxies after each request."""
     if not PROXY_LIST:
         return None
-    return random.choice(PROXY_LIST)
+    return next(proxy_cycle)
 
 def get_random_user_agent():
     """Get a random user agent to avoid detection"""
