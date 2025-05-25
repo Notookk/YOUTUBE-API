@@ -1623,14 +1623,16 @@ def get_random_user_agent():
 from playwright.sync_api import sync_playwright
 
 # Cache cookies for 10 minutes for efficiency
-YOUTUBE_COOKIE_CACHE = {"cookie": None, "timestamp": 0}
-
+YOUTUBE_COOKIE_CACHE = {}
 def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
-    import time
     now = time.time()
-    if (YOUTUBE_COOKIE_CACHE["cookie"] and
-        now - YOUTUBE_COOKIE_CACHE["timestamp"] < cache_minutes * 60):
-        return YOUTUBE_COOKIE_CACHE["cookie"]
+    key = str(proxy) if proxy else "default"
+    cached = YOUTUBE_COOKIE_CACHE.get(key)
+    if cached and now - cached["timestamp"] < cache_minutes * 60:
+        return cached["cookie"]
+    ...
+    YOUTUBE_COOKIE_CACHE[key] = {"cookie": cookie_str, "timestamp": now}
+    return cookie_str
 
     with sync_playwright() as p:
         browser_args = []
@@ -1681,7 +1683,7 @@ def get_random_headers(extra_cookie=None):
 
 def add_jitter(seconds=1):
     """Add random delay to make requests seem more human-like"""
-    jitter = random.uniform(0.1, int(seconds))
+    jitter = random.uniform(0.1, float(seconds))
     time.sleep(jitter)
 
 def generate_cache_key(func_name, *args, **kwargs):
