@@ -1647,7 +1647,15 @@ def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
         YOUTUBE_COOKIE_CACHE["cookie"] = cookie_str
         YOUTUBE_COOKIE_CACHE["timestamp"] = now
         return cookie_str 
+        
+from flask import g
 
+def get_request_youtube_cookie(proxy=None):
+    if hasattr(g, "youtube_cookie") and g.youtube_cookie:
+        return g.youtube_cookie
+    cookie_str = get_youtube_cookies_playwright(proxy=proxy)
+    g.youtube_cookie = cookie_str
+    return cookie_str
 
 def get_random_headers(extra_cookie=None):
     headers = {
@@ -1716,7 +1724,7 @@ def cached(timeout=CACHE_TIMEOUT):
 
 def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    cookie_str = get_youtube_cookies_playwright(proxy=proxy)
+    cookie_str = get_request_youtube_cookie(proxy=proxy)
     headers = get_random_headers(extra_cookie=cookie_str)
     return {
         "quiet": True,
@@ -2307,7 +2315,7 @@ def stream_media(stream_id):
             buffer_size = 1024 * 1024  # 1MB
             
             proxy = get_rotating_proxy()
-            cookie_str = get_youtube_cookies_playwright(proxy=proxy)
+            cookie_str = get_request_youtube_cookie(proxy=proxy)
             headers = get_random_headers(extra_cookie=cookie_str)
             headers["Range"] = request.headers.get("Range", "bytes=0-")
             proxies = {"all": f"http://{proxy}"} if proxy else None
