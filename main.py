@@ -1620,38 +1620,38 @@ def get_random_user_agent():
     """Get a random user agent to avoid detection"""
     return random.choice(USER_AGENTS)
 
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 
-# Cache cookies for 10 minutes for efficiency
 YOUTUBE_COOKIE_CACHE = {}
-def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
+
+async def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
     now = time.time()
     key = str(proxy) if proxy else "default"
     cached = YOUTUBE_COOKIE_CACHE.get(key)
     if cached and now - cached["timestamp"] < cache_minutes * 60:
         return cached["cookie"]
 
-    with sync_playwright() as p:
+    async with async_playwright() as p:
         browser_args = []
         if proxy:
             browser_args.append(f'--proxy-server={proxy}')
-        browser = p.chromium.launch(headless=True, args=browser_args)
-        context = browser.new_context()
-        page = context.new_page()
-        page.goto('https://www.youtube.com', timeout=30000)
-        page.wait_for_timeout(5000)
-        cookies = context.cookies()
-        browser.close()
+        browser = await p.chromium.launch(headless=True, args=browser_args)
+        context = await browser.new_context()
+        page = await context.new_page()
+        await page.goto('https://www.youtube.com', timeout=30000)
+        await page.wait_for_timeout(5000)
+        cookies = await context.cookies()
+        await browser.close()
         cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
         YOUTUBE_COOKIE_CACHE[key] = {"cookie": cookie_str, "timestamp": now}
         return cookie_str
         
 from flask import g
 
-def get_request_youtube_cookie(proxy=None):
+async def get_request_youtube_cookie(proxy=None):
     if hasattr(g, "youtube_cookie") and g.youtube_cookie:
         return g.youtube_cookie
-    cookie_str = get_youtube_cookies_playwright(proxy=proxy)
+    cookie_str = await get_request_youtube_cookie(proxy=proxy)
     g.youtube_cookie = cookie_str
     return cookie_str
 
