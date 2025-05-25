@@ -1619,6 +1619,25 @@ def get_rotating_proxy():
 def get_random_user_agent():
     """Get a random user agent to avoid detection"""
     return random.choice(USER_AGENTS)
+    
+def get_random_headers():
+    return {
+        "User-Agent": get_random_user_agent(),
+        "Accept": random.choice([
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+            "application/json, text/plain, */*"
+        ]),
+        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Language": random.choice(["en-US,en;q=0.9", "en-GB,en;q=0.8"]),
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Referer": "https://www.google.com/"
+    }
+
 
 def add_jitter(seconds=1):
     """Add random delay to make requests seem more human-like"""
@@ -1665,6 +1684,7 @@ def cached(timeout=CACHE_TIMEOUT):
 
 def clean_ytdl_options():
     """Generate clean ytdlp options to avoid detection"""
+    headers = get_random_headers()
     return {
         "quiet": True,
         "no_warnings": True,
@@ -1675,18 +1695,9 @@ def clean_ytdl_options():
         "extractor_retries": 5,
         "socket_timeout": 15,
         "extract_flat": "in_playlist",
-        "user_agent": get_random_user_agent(),
-        "headers": {
-            "Accept-Language": "en-US,en;q=0.9",
-            "Sec-Fetch-Mode": "navigate",
-            "Referer": "https://www.google.com/"
-        },
-        "http_headers": {
-            "User-Agent": get_random_user_agent(),
-            "Accept-Language": "en-US,en;q=0.9",
-            "Sec-Fetch-Mode": "navigate",
-            "Referer": "https://www.google.com/"
-        }
+        "user_agent": headers["User-Agent"],
+        "headers": headers,
+        "http_headers": headers
     }
 
 def time_to_seconds(time_str):
@@ -2261,10 +2272,8 @@ def stream_media(stream_id):
             buffer_size = 1024 * 1024  # 1MB
             
             # Create a streaming session with appropriate headers
-            headers = {
-                "User-Agent": get_random_user_agent(),
-                "Range": request.headers.get("Range", "bytes=0-")
-            }
+            headers = get_random_headers()
+            headers["Range"] = request.headers.get("Range", "bytes=0-")
             
             proxy = get_rotating_proxy()
             proxies = {"all": f"http://{proxy}"} if proxy else None
