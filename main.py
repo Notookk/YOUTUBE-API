@@ -1630,9 +1630,6 @@ def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
     cached = YOUTUBE_COOKIE_CACHE.get(key)
     if cached and now - cached["timestamp"] < cache_minutes * 60:
         return cached["cookie"]
-    ...
-    YOUTUBE_COOKIE_CACHE[key] = {"cookie": cookie_str, "timestamp": now}
-    return cookie_str
 
     with sync_playwright() as p:
         browser_args = []
@@ -1642,13 +1639,12 @@ def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
         context = browser.new_context()
         page = context.new_page()
         page.goto('https://www.youtube.com', timeout=30000)
-        page.wait_for_timeout(5000)  # Let YouTube set cookies
+        page.wait_for_timeout(5000)
         cookies = context.cookies()
         browser.close()
         cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
-        YOUTUBE_COOKIE_CACHE["cookie"] = cookie_str
-        YOUTUBE_COOKIE_CACHE["timestamp"] = now
-        return cookie_str 
+        YOUTUBE_COOKIE_CACHE[key] = {"cookie": cookie_str, "timestamp": now}
+        return cookie_str
         
 from flask import g
 
