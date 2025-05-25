@@ -1622,7 +1622,16 @@ def get_random_user_agent():
 
 from playwright.sync_api import sync_playwright
 
-def get_youtube_cookies_playwright(proxy=None):
+# Cache cookies for 10 minutes for efficiency
+YOUTUBE_COOKIE_CACHE = {"cookie": None, "timestamp": 0}
+
+def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
+    import time
+    now = time.time()
+    if (YOUTUBE_COOKIE_CACHE["cookie"] and
+        now - YOUTUBE_COOKIE_CACHE["timestamp"] < cache_minutes * 60):
+        return YOUTUBE_COOKIE_CACHE["cookie"]
+
     with sync_playwright() as p:
         browser_args = []
         if proxy:
@@ -1631,11 +1640,13 @@ def get_youtube_cookies_playwright(proxy=None):
         context = browser.new_context()
         page = context.new_page()
         page.goto('https://www.youtube.com', timeout=30000)
-        page.wait_for_timeout(5000)  # Let the page load and cookies set
+        page.wait_for_timeout(5000)  # Let YouTube set cookies
         cookies = context.cookies()
         browser.close()
         cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
-        return cookie_str   
+        YOUTUBE_COOKIE_CACHE["cookie"] = cookie_str
+        YOUTUBE_COOKIE_CACHE["timestamp"] = now
+        return cookie_str 
 
 
 def get_random_headers(extra_cookie=None):
@@ -1704,8 +1715,9 @@ def cached(timeout=CACHE_TIMEOUT):
     return decorator
 
 def clean_ytdl_options():
-    """Generate clean ytdlp options to avoid detection"""
-    headers = get_random_headers()
+    proxy = get_rotating_proxy()
+    cookie_str = get_youtube_cookies_playwright(proxy=proxy)
+    headers = get_random_headers(extra_cookie=cookie_str)
     return {
         "quiet": True,
         "no_warnings": True,
@@ -1718,7 +1730,9 @@ def clean_ytdl_options():
         "extract_flat": "in_playlist",
         "user_agent": headers["User-Agent"],
         "headers": headers,
-        "http_headers": headers
+        "http_headers": headers,
+        "proxy": proxy if proxy else None,
+        "cookie": cookie_str
     }
 
 def time_to_seconds(time_str):
@@ -2292,11 +2306,10 @@ def stream_media(stream_id):
             # Buffer size
             buffer_size = 1024 * 1024  # 1MB
             
-            # Create a streaming session with appropriate headers
-            headers = get_random_headers()
-            headers["Range"] = request.headers.get("Range", "bytes=0-")
-            
             proxy = get_rotating_proxy()
+            cookie_str = get_youtube_cookies_playwright(proxy=proxy)
+            headers = get_random_headers(extra_cookie=cookie_str)
+            headers["Range"] = request.headers.get("Range", "bytes=0-")
             proxies = {"all": f"http://{proxy}"} if proxy else None
             with httpx.stream("GET", url, headers=headers, proxies=proxies, timeout=30) as response:
                 # Forward content type and other headers
