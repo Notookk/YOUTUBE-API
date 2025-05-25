@@ -12,3 +12,4 @@ trafilatura
 pymongo
 flask-login
 flask-wtf
+playwright
