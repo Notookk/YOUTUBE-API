@@ -1722,7 +1722,7 @@ def cached(timeout=CACHE_TIMEOUT):
 
 def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    cookie_str = get_request_youtube_cookie(proxy=proxy)
+    cookie_str = await get_request_youtube_cookie(proxy=proxy)
     headers = get_random_headers(extra_cookie=cookie_str)
     return {
         "quiet": True,
@@ -2313,7 +2313,7 @@ def stream_media(stream_id):
             buffer_size = 1024 * 1024  # 1MB
             
             proxy = get_rotating_proxy()
-            cookie_str = get_request_youtube_cookie(proxy=proxy)
+            cookie_str = await get_request_youtube_cookie(proxy=proxy)
             headers = get_random_headers(extra_cookie=cookie_str)
             headers["Range"] = request.headers.get("Range", "bytes=0-")
             proxies = {"all": f"http://{proxy}"} if proxy else None
