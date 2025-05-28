@@ -2313,9 +2313,7 @@ def stream_media(stream_id):
     # Set appropriate content type
     content_type = "video/mp4" if is_video else "audio/mp4"
     
-proxy = get_rotating_proxy()
-cookie_str = asyncio.run(get_request_youtube_cookie(proxy=proxy))
-headers = get_random_headers(extra_cookie=cookie_str)
+
 def generate():
     try:
         buffer_size = 1024 * 1024  # 1MB
