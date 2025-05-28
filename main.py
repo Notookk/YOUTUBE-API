@@ -145,7 +145,16 @@ proxy_cycle = itertools.cycle(PROXY_LIST)
 def get_rotating_proxy():
     if not PROXY_LIST:
         return None
-    return next(proxy_cycle)
+    proxy_line = next(proxy_cycle)
+    parts = proxy_line.split(":")
+    if len(parts) == 4:
+        ip, port, user, pw = parts
+        return f"http://{user}:{pw}@{ip}:{port}"
+    elif len(parts) == 2:
+        ip, port = parts
+        return f"http://{ip}:{port}"
+    else:
+        return None  # skip malformed
 
 # HTML templates
 INDEX_HTML = """<!DOCTYPE html>
@@ -1651,7 +1660,7 @@ from flask import g
 async def get_request_youtube_cookie(proxy=None):
     if hasattr(g, "youtube_cookie") and g.youtube_cookie:
         return g.youtube_cookie
-    cookie_str = await get_request_youtube_cookie(proxy=proxy)
+    cookie_str = await get_youtube_cookies_playwright(proxy=proxy)
     g.youtube_cookie = cookie_str
     return cookie_str
 
@@ -1722,7 +1731,7 @@ def cached(timeout=CACHE_TIMEOUT):
 
 def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    cookie_str = await get_request_youtube_cookie(proxy=proxy)
+    cookie_str = asyncio.run(get_request_youtube_cookie(proxy=proxy))
     headers = get_random_headers(extra_cookie=cookie_str)
     return {
         "quiet": True,
