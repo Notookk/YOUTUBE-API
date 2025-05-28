@@ -2328,13 +2328,6 @@ def generate():
     except Exception as e:
         logger.error(f"Streaming error: {e}")
         yield b""
-                
-                # Stream the content
-                for chunk in response.iter_bytes(chunk_size=buffer_size):
-                    process(chunk)
-        except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            yield b""
     
     # Create a streaming response
     return Response(
