@@ -1922,7 +1922,7 @@ class YouTubeAPIService:
                 }]
             
             # Use yt-dlp for search to avoid proxy issues
-            options = clean_ytdl_options()
+            options = await clean_ytdl_options()
             options["proxy"] = get_rotating_proxy()
             options.update({
                 "quiet": True,
@@ -1986,7 +1986,7 @@ class YouTubeAPIService:
                 return False
             
             # Use yt-dlp to check if the URL exists
-            options = clean_ytdl_options()
+            options = await clean_ytdl_options()
             options["proxy"] = get_rotating_proxy()
             options.update({
                 "skip_download": True,
@@ -2028,7 +2028,7 @@ class YouTubeAPIService:
             url = normalize_url(url)
             
             # Use yt-dlp to get video details
-            options = clean_ytdl_options()
+            options = await clean_ytdl_options()
             options["proxy"] = get_rotating_proxy()
             with yt_dlp.YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -2090,7 +2090,7 @@ class YouTubeAPIService:
             stream_id = str(uuid.uuid4())
             
             format_str = "best[height<=720]" if is_video else "bestaudio"
-            options = clean_ytdl_options()
+            options = await clean_ytdl_options()
             options["proxy"] = get_rotating_proxy()
             options.update({
                 "format": format_str,
