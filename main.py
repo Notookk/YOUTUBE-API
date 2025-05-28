@@ -1723,12 +1723,9 @@ def cached(timeout=CACHE_TIMEOUT):
         return wrapper
     return decorator
 
-def clean_ytdl_options():
+async def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    try:
-        cookie_str = asyncio.run(get_request_youtube_cookie(proxy=proxy))
-    except RuntimeError:
-        raise RuntimeError("asyncio.run() cannot be called from a running event loop. Refactor for async context.")
+    cookie_str = await get_request_youtube_cookie(proxy=proxy)
     headers = get_random_headers(extra_cookie=cookie_str)
     return {
         "quiet": True,
@@ -1903,7 +1900,7 @@ class YouTubeAPIService:
     async def search_videos(query, limit=1):
         """Search YouTube videos"""
         try:
-            add_jitter(1)  # Add a small delay
+            await add_jitter(1)
             
             # Special handling for common search terms
             if query.lower() == '295':
