@@ -154,8 +154,7 @@ def get_rotating_proxy():
         elif len(parts) == 2 and parts[1].isdigit():
             ip, port = parts
             return f"http://{ip}:{port}"
-        # else, skip malformed
-    return None
+    return None  # skip malformed lines entirely
 
 # HTML templates
 INDEX_HTML = """<!DOCTYPE html>
@@ -1682,10 +1681,9 @@ def get_random_headers(extra_cookie=None):
     return headers
 
 
-def add_jitter(seconds=1):
-    """Add random delay to make requests seem more human-like"""
+async def add_jitter(seconds=1):
     jitter = random.uniform(0.1, float(seconds))
-    time.sleep(jitter)
+    await asyncio.sleep(jitter)
 
 def generate_cache_key(func_name, *args, **kwargs):
     """Generate a cache key based on function name and arguments"""
@@ -1730,7 +1728,7 @@ def clean_ytdl_options():
     try:
         cookie_str = asyncio.run(get_request_youtube_cookie(proxy=proxy))
     except RuntimeError:
-        raise RuntimeError("asyncio.run() cannot be called from a running event loop. Refactor to async.")
+        raise RuntimeError("asyncio.run() cannot be called from a running event loop. Refactor for async context.")
     headers = get_random_headers(extra_cookie=cookie_str)
     return {
         "quiet": True,
@@ -2315,19 +2313,21 @@ def stream_media(stream_id):
     # Set appropriate content type
     content_type = "video/mp4" if is_video else "audio/mp4"
     
-    def generate():
-        try:
-            # Buffer size
-            buffer_size = 1024 * 1024  # 1MB
-            
-            proxy = get_rotating_proxy()
-            cookie_str = await get_request_youtube_cookie(proxy=proxy)
-            headers = get_random_headers(extra_cookie=cookie_str)
-            headers["Range"] = request.headers.get("Range", "bytes=0-")
-            proxies = {"all": f"http://{proxy}"} if proxy else None
-            with httpx.stream("GET", url, headers=headers, proxies=proxies, timeout=30) as response:
-                # Forward content type and other headers
-                yield b""
+proxy = get_rotating_proxy()
+cookie_str = asyncio.run(get_request_youtube_cookie(proxy=proxy))
+headers = get_random_headers(extra_cookie=cookie_str)
+def generate():
+    try:
+        buffer_size = 1024 * 1024  # 1MB
+        headers["Range"] = request.headers.get("Range", "bytes=0-")
+        proxies = {"all": f"http://{proxy}"} if proxy else None
+        with httpx.stream("GET", url, headers=headers, proxies=proxies, timeout=30) as response:
+            yield b""
+            for chunk in response.iter_bytes(chunk_size=buffer_size):
+                yield chunk
+    except Exception as e:
+        logger.error(f"Streaming error: {e}")
+        yield b""
                 
                 # Stream the content
                 for chunk in response.iter_bytes(chunk_size=buffer_size):
