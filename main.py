@@ -145,16 +145,17 @@ proxy_cycle = itertools.cycle(PROXY_LIST)
 def get_rotating_proxy():
     if not PROXY_LIST:
         return None
-    proxy_line = next(proxy_cycle)
-    parts = proxy_line.split(":")
-    if len(parts) == 4:
-        ip, port, user, pw = parts
-        return f"http://{user}:{pw}@{ip}:{port}"
-    elif len(parts) == 2:
-        ip, port = parts
-        return f"http://{ip}:{port}"
-    else:
-        return None  # skip malformed
+    for _ in range(len(PROXY_LIST)):
+        proxy_line = next(proxy_cycle)
+        parts = proxy_line.split(":")
+        if len(parts) == 4 and parts[1].isdigit():
+            ip, port, user, pw = parts
+            return f"http://{user}:{pw}@{ip}:{port}"
+        elif len(parts) == 2 and parts[1].isdigit():
+            ip, port = parts
+            return f"http://{ip}:{port}"
+        # else, skip malformed
+    return None
 
 # HTML templates
 INDEX_HTML = """<!DOCTYPE html>
@@ -1619,11 +1620,6 @@ ADMIN_HTML = """<!DOCTYPE html>
 </html>
 """
 
-def get_rotating_proxy():
-    """Rotate through the proxies after each request."""
-    if not PROXY_LIST:
-        return None
-    return next(proxy_cycle)
 
 def get_random_user_agent():
     """Get a random user agent to avoid detection"""
@@ -1731,7 +1727,10 @@ def cached(timeout=CACHE_TIMEOUT):
 
 def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    cookie_str = asyncio.run(get_request_youtube_cookie(proxy=proxy))
+    try:
+        cookie_str = asyncio.run(get_request_youtube_cookie(proxy=proxy))
+    except RuntimeError:
+        raise RuntimeError("asyncio.run() cannot be called from a running event loop. Refactor to async.")
     headers = get_random_headers(extra_cookie=cookie_str)
     return {
         "quiet": True,
