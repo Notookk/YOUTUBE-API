@@ -2331,7 +2331,7 @@ def generate():
                 
                 # Stream the content
                 for chunk in response.iter_bytes(chunk_size=buffer_size):
-                    yield chunk
+                    process(chunk)
         except Exception as e:
             logger.error(f"Streaming error: {e}")
             yield b""
