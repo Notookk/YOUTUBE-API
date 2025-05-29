@@ -1927,74 +1927,80 @@ class YouTubeAPIService:
     base_url = "https://www.youtube.com/watch?v="
     list_base = "https://youtube.com/playlist?list="
     
-@staticmethod
-async def search_videos(query, limit=1):
-    """Search YouTube videos"""
-    try:
-        await add_jitter(1)
-        
-        # Special handling for common search terms
-        if query.lower() == '295':
-            return [{
-                "id": "n_FCrCQ6-bA",
-                "title": "295 (Official Audio) | Sidhu Moose Wala | The Kidd | Moosetape",
-                "duration": 273,
-                "duration_text": "4:33",
-                "views": 706072166,
-                "publish_time": "2021-05-13",
-                "channel": "Sidhu Moose Wala",
-                "thumbnail": "https://i.ytimg.com/vi_webp/n_FCrCQ6-bA/maxresdefault.webp",
-                "link": "https://www.youtube.com/watch?v=n_FCrCQ6-bA",
-            }]
-        
-        options = await clean_ytdl_options()
-        options.update({
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": True,
-            "default_search": "ytsearch",
-            "skip_download": True,
-            "ignoreerrors": True  # Add this to ignore errors
-        })
-        
-        search_term = f"ytsearch{limit}:{query}"
-        
-        with yt_dlp.YoutubeDL(options) as ydl:
-            try:
-                search_results = ydl.extract_info(search_term, download=False)
-            except Exception as e:
-                logger.error(f"YouTube search failed for '{query}': {e}")
-                return []
-                
-            if not search_results or 'entries' not in search_results:
-                return []
-                
-            videos = []
-            for entry in search_results['entries']:
-                if not entry:
-                    continue
-                    
-                video_id = entry.get('id', '')
-                if not video_id:  # Skip entries without ID
-                    continue
-                    
-                video = {
-                    "id": video_id,
-                    "title": entry.get('title', 'Unknown'),
-                    "duration": entry.get('duration', 0),
-                    "duration_text": str(datetime.timedelta(seconds=entry.get('duration', 0))[2:] if entry.get('duration') else "0:00",
-                    "views": entry.get('view_count', 0),
-                    "publish_time": entry.get('upload_date', ''),
-                    "channel": entry.get('uploader', ''),
-                    "thumbnail": entry.get('thumbnail', ''),
-                    "link": f"https://www.youtube.com/watch?v={video_id}",
-                }
-                videos.append(video)
+    @staticmethod
+    async def search_videos(query, limit=1):
+        """Search YouTube videos"""
+        try:
+            await add_jitter(1)
             
-            return videos
-    except Exception as e:
-        logger.error(f"Error searching videos: {e}")
-        return []
+            # Special handling for common search terms
+            if query.lower() == '295':
+                # This is a hardcoded entry for "295" by Sidhu Moose Wala
+                # Ensures this specific popular search always works
+                return [{
+                    "id": "n_FCrCQ6-bA",
+                    "title": "295 (Official Audio) | Sidhu Moose Wala | The Kidd | Moosetape",
+                    "duration": 273,
+                    "duration_text": "4:33",
+                    "views": 706072166,
+                    "publish_time": "2021-05-13",
+                    "channel": "Sidhu Moose Wala",
+                    "thumbnail": "https://i.ytimg.com/vi_webp/n_FCrCQ6-bA/maxresdefault.webp",
+                    "link": "https://www.youtube.com/watch?v=n_FCrCQ6-bA",
+                }]
+            
+            # Use yt-dlp for search to avoid proxy issues
+            options = await clean_ytdl_options()
+            options.update({
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": True,
+                "default_search": "ytsearch",
+                "skip_download": True
+            })
+            
+            search_term = f"ytsearch{limit}:{query}"
+            
+            with yt_dlp.YoutubeDL(options) as ydl:
+                search_results = ydl.extract_info(search_term, download=False)
+                
+                if not search_results or 'entries' not in search_results:
+                    return []
+                
+                videos = []
+                for entry in search_results['entries']:
+                    if not entry:
+                        continue
+                        
+                    video_id = entry.get('id', '')
+                    title = entry.get('title', 'Unknown')
+                    duration = entry.get('duration', 0)
+                    duration_text = str(datetime.timedelta(seconds=duration)) if duration else "0:00"
+                    if duration_text.startswith('0:'):
+                        duration_text = duration_text[2:]
+                    
+                    views = entry.get('view_count', 0)
+                    channel = entry.get('uploader', '')
+                    thumbnail = entry.get('thumbnail', '')
+                    link = f"https://www.youtube.com/watch?v={video_id}"
+                    
+                    video = {
+                        "id": video_id,
+                        "title": title,
+                        "duration": duration,
+                        "duration_text": duration_text,
+                        "views": views,
+                        "publish_time": entry.get('upload_date', ''),
+                        "channel": channel,
+                        "thumbnail": thumbnail,
+                        "link": link,
+                    }
+                    videos.append(video)
+                
+                return videos
+        except Exception as e:
+            logger.error(f"Error searching videos: {e}")
+            return []
     
     @staticmethod
     async def url_exists(url, video_id=None):
