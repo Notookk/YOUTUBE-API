@@ -1923,9 +1923,7 @@ def required_admin_key(func):
     return decorated_function
 
 class YouTubeAPIService:
-    """Service class to handle YouTube operations"""
-    base_url = "https://www.youtube.com/watch?v="
-    list_base = "https://youtube.com/playlist?list="
+    """Service class to handle YouTube operations with robust search functionality"""
     
     @staticmethod
     async def search_videos(query, limit=1, max_retries=3):
@@ -1946,42 +1944,38 @@ class YouTubeAPIService:
                     "thumbnail": "https://i.ytimg.com/vi_webp/n_FCrCQ6-bA/maxresdefault.webp",
                     "link": "https://www.youtube.com/watch?v=n_FCrCQ6-bA",
                 }]
-    
+
             # Try different approaches
             for attempt in range(max_retries):
                 try:
                     # Approach 1: Standard yt-dlp search
-                    result = await _try_standard_search(query, limit)
+                    result = await YouTubeAPIService._try_standard_search(query, limit)
                     if result:
                         return result
-    
+
                     # Approach 2: Alternative extractor
-                    result = await _try_alternative_extractor(query, limit)
+                    result = await YouTubeAPIService._try_alternative_extractor(query, limit)
                     if result:
                         return result
-    
-                    # Approach 3: Direct HTML scraping as last resort
-                    if attempt == max_retries - 1:
-                        result = await _try_direct_scrape(query, limit)
-                        if result:
-                            return result
-    
+
                     await asyncio.sleep(2 ** attempt)  # Exponential backoff
-    
+
                 except Exception as e:
                     logger.warning(f"Attempt {attempt + 1} failed for '{query}': {str(e)}")
                     continue
-    
+
             logger.error(f"All search methods failed for '{query}'")
             return []
-    
+
         except Exception as e:
             logger.error(f"Unexpected error in search_videos: {str(e)}", exc_info=True)
             return []
-    
+
+    @staticmethod
     async def _try_standard_search(query, limit):
         """Standard yt-dlp search with robust configuration"""
-        options = {
+        options = await clean_ytdl_options()
+        options.update({
             "quiet": True,
             "no_warnings": True,
             "extract_flat": True,
@@ -1993,25 +1987,27 @@ class YouTubeAPIService:
             "extractor_args": {
                 "youtube": {
                     "skip": ["dash", "hls"],
-                    "player_client": ["android", "web"]  # Try different clients
+                    "player_client": ["android", "web"]
                 }
             },
             "compat_opts": ["no-youtube-unavailable-videos"]
-        }
-    
+        })
+
         search_term = f"ytsearch{limit}:{query}"
         
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
                 search_results = ydl.extract_info(search_term, download=False)
-                return _process_results(search_results)
+                return YouTubeAPIService._process_results(search_results)
         except Exception as e:
             logger.debug(f"Standard search failed for '{query}': {str(e)}")
             return None
-    
+
+    @staticmethod
     async def _try_alternative_extractor(query, limit):
         """Try alternative extractor configuration"""
-        options = {
+        options = await clean_ytdl_options()
+        options.update({
             "quiet": True,
             "extract_flat": True,
             "default_search": "ytsearch",
@@ -2019,33 +2015,25 @@ class YouTubeAPIService:
             "ignoreerrors": True,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android"],  # Mobile client only
+                    "player_client": ["android"],
                     "skip": ["dash", "hls", "livestreams"]
                 }
             },
-            "compat_opts": ["no-youtube-unavailable-videos"]
-        }
-    
+            "compat_opts": ["no-youtube-unavailable-videos"],
+            "proxy": None  # Try without proxy
+        })
+
         search_term = f"ytsearch{limit}:{query}"
         
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
                 search_results = ydl.extract_info(search_term, download=False)
-                return _process_results(search_results)
+                return YouTubeAPIService._process_results(search_results)
         except Exception as e:
             logger.debug(f"Alternative extractor failed for '{query}': {str(e)}")
             return None
-    
-    async def _try_direct_scrape(query, limit):
-        """Fallback to direct HTML scraping"""
-        try:
-            # This would require implementing actual HTML scraping
-            # For now, we'll just return None
-            return None
-        except Exception as e:
-            logger.debug(f"Direct scrape failed for '{query}': {str(e)}")
-            return None
-    
+
+    @staticmethod
     def _process_results(search_results):
         """Process and validate search results"""
         if not search_results or 'entries' not in search_results:
