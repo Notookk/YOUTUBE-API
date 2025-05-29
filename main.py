@@ -1932,7 +1932,7 @@ async def search_videos(query, limit=1):
     """Search YouTube videos"""
     try:
         await add_jitter(1)
-
+        
         # Special handling for common search terms
         if query.lower() == '295':
             return [{
@@ -1946,7 +1946,7 @@ async def search_videos(query, limit=1):
                 "thumbnail": "https://i.ytimg.com/vi_webp/n_FCrCQ6-bA/maxresdefault.webp",
                 "link": "https://www.youtube.com/watch?v=n_FCrCQ6-bA",
             }]
-
+        
         options = await clean_ytdl_options()
         options.update({
             "quiet": True,
@@ -1954,40 +1954,35 @@ async def search_videos(query, limit=1):
             "extract_flat": True,
             "default_search": "ytsearch",
             "skip_download": True,
-            "ignoreerrors": True
+            "ignoreerrors": True  # Add this to ignore errors
         })
-
+        
         search_term = f"ytsearch{limit}:{query}"
-
+        
         with yt_dlp.YoutubeDL(options) as ydl:
             try:
                 search_results = ydl.extract_info(search_term, download=False)
             except Exception as e:
-                logger.error(f"YouTube search failed for '{query}': {repr(e)}")
+                logger.error(f"YouTube search failed for '{query}': {e}")
                 return []
-
+                
             if not search_results or 'entries' not in search_results:
                 return []
-
+                
             videos = []
             for entry in search_results['entries']:
                 if not entry:
                     continue
-
+                    
                 video_id = entry.get('id', '')
-                if not video_id:
+                if not video_id:  # Skip entries without ID
                     continue
-
-                duration = entry.get('duration', 0)
-                duration_text = str(datetime.timedelta(seconds=duration)) if duration else "0:00"
-                if duration_text.startswith('0:'):
-                    duration_text = duration_text[2:]
-
+                    
                 video = {
                     "id": video_id,
                     "title": entry.get('title', 'Unknown'),
-                    "duration": duration,
-                    "duration_text": duration_text,
+                    "duration": entry.get('duration', 0),
+                    "duration_text": str(datetime.timedelta(seconds=entry.get('duration', 0))[2:] if entry.get('duration') else "0:00",
                     "views": entry.get('view_count', 0),
                     "publish_time": entry.get('upload_date', ''),
                     "channel": entry.get('uploader', ''),
@@ -1995,13 +1990,11 @@ async def search_videos(query, limit=1):
                     "link": f"https://www.youtube.com/watch?v={video_id}",
                 }
                 videos.append(video)
-
+            
             return videos
-
     except Exception as e:
-        logger.error(f"Error searching videos: {repr(e)}")
+        logger.error(f"Error searching videos: {e}")
         return []
-    
     
     @staticmethod
     async def url_exists(url, video_id=None):
