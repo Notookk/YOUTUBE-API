@@ -1749,7 +1749,7 @@ def cached(timeout=CACHE_TIMEOUT):
 
 async def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    proxy_url = None
+    proxy_url = 
     if proxy:
         parts = proxy.replace("http://", "").split(":")
         if len(parts) == 4:
@@ -1931,7 +1931,7 @@ class YouTubeAPIService:
     async def search_videos(query, limit=1):
         """Search YouTube videos"""
         try:
-            add_jitter(1)  # Add a small delay
+            await add_jitter(1)
             
             # Special handling for common search terms
             if query.lower() == '295':
@@ -1950,7 +1950,7 @@ class YouTubeAPIService:
                 }]
             
             # Use yt-dlp for search to avoid proxy issues
-            options = clean_ytdl_options()
+            options = await clean_ytdl_options()
             options.update({
                 "quiet": True,
                 "no_warnings": True,
@@ -2013,7 +2013,7 @@ class YouTubeAPIService:
                 return False
             
             # Use yt-dlp to check if the URL exists
-            options = clean_ytdl_options()
+            options = await clean_ytdl_options()
             options.update({
                 "skip_download": True,
                 "extract_flat": True,
@@ -2054,8 +2054,7 @@ class YouTubeAPIService:
             url = normalize_url(url)
             
             # Use yt-dlp to get video details
-            options = clean_ytdl_options()
-            
+            options = await clean_ytdl_options()
             with yt_dlp.YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=False)
                 
@@ -2116,7 +2115,7 @@ class YouTubeAPIService:
             stream_id = str(uuid.uuid4())
             
             format_str = "best[height<=720]" if is_video else "bestaudio"
-            options = clean_ytdl_options()
+            options = await clean_ytdl_options()
             options.update({
                 "format": format_str,
                 "skip_download": True,
@@ -2175,11 +2174,11 @@ def init_db_data():
             db.create_all()
             
             # Check if admin API key exists
-            admin_key = ApiKey.query.filter_by(key="JAYDIP").first()
+            admin_key = ApiKey.query.filter_by(key="XOTIK").first()
             if not admin_key:
                 # Create admin key
                 admin_key = ApiKey(
-                    key="JAYDIP",
+                    key="XOTIK",
                     name="Admin Key",
                     is_admin=True,
                     created_at=datetime.datetime.now(),
@@ -2193,7 +2192,7 @@ def init_db_data():
                 
                 # Create API request key
                 api_request_key = ApiKey(
-                    key="jaydip",
+                    key="xotik",
                     name="API Request Key",
                     is_admin=False,
                     created_at=datetime.datetime.now(),
@@ -2322,45 +2321,32 @@ def youtube():
 
 @app.route("/stream/<stream_id>", methods=["GET"])
 def stream_media(stream_id):
-    """Stream media from YouTube"""
     stream_key = f"stream:{stream_id}"
     stream_data = cache.get(stream_key)
-    
     if not stream_data:
         return jsonify({"error": "Stream not found or expired"}), 404
-    
+
     url = stream_data.get("url")
     is_video = stream_data.get("is_video", False)
-    
     if not url:
         return jsonify({"error": "Invalid stream URL"}), 500
-    
-    # Set appropriate content type
+
     content_type = "video/mp4" if is_video else "audio/mp4"
-    
+    headers = get_random_headers()
+    headers["Range"] = request.headers.get("Range", "bytes=0-")
+    proxy = get_rotating_proxy()
+    proxies = {"all": proxy} if proxy else None
+
     def generate():
         try:
-            # Buffer size
             buffer_size = 1024 * 1024  # 1MB
-            
-            # Create a streaming session with appropriate headers
-            headers = {
-                "User-Agent": get_random_user_agent(),
-                "Range": request.headers.get("Range", "bytes=0-")
-            }
-            
-            with httpx.stream("GET", url, headers=headers, timeout=30) as response:
-                # Forward content type and other headers
-                yield b""
-                
-                # Stream the content
+            with httpx.stream("GET", url, headers=headers, proxies=proxies, timeout=30) as response:
                 for chunk in response.iter_bytes(chunk_size=buffer_size):
                     yield chunk
         except Exception as e:
             logger.error(f"Streaming error: {e}")
             yield b""
-    
-    # Create a streaming response
+
     return Response(
         stream_with_context(generate()),
         content_type=content_type,
