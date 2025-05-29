@@ -150,7 +150,7 @@ def get_rotating_proxy():
         parts = proxy_line.split(":")
         if len(parts) == 4 and parts[1].isdigit():
             ip, port, user, pw = parts
-            return f"{ip}:{port}:{user}:{pw}"
+            return f"http://{user}:{pw}@{ip}:{port}"
         elif len(parts) == 2 and parts[1].isdigit():
             ip, port = parts
             return f"http://{ip}:{port}"
@@ -1628,60 +1628,60 @@ from playwright.async_api import async_playwright
 
 YOUTUBE_COOKIE_CACHE = {}
 
-async def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
-    now = time.time()
-    key = str(proxy) if proxy else "default"
-    cached = YOUTUBE_COOKIE_CACHE.get(key)
-    if cached and now - cached["timestamp"] < cache_minutes * 60:
-        return cached["cookie"]
+# async def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
+#     now = time.time()
+#     key = str(proxy) if proxy else "default"
+#     cached = YOUTUBE_COOKIE_CACHE.get(key)
+#     if cached and now - cached["timestamp"] < cache_minutes * 60:
+#         return cached["cookie"]
 
-    async with async_playwright() as p:
-        proxy_server = None
-        proxy_user = None
-        proxy_pass = None
-        if proxy:
-            parts = proxy.replace("http://", "").split(":")
-            if len(parts) == 4:
-                ip, port, user, pw = parts
-                proxy_server = f"http://{ip}:{port}"
-                proxy_user = user
-                proxy_pass = pw
-            elif len(parts) == 2:
-                ip, port = parts
-                proxy_server = f"http://{ip}:{port}"
+#     async with async_playwright() as p:
+#         proxy_server = None
+#         proxy_user = None
+#         proxy_pass = None
+#         if proxy:
+#             parts = proxy.replace("http://", "").split(":")
+#             if len(parts) == 4:
+#                 ip, port, user, pw = parts
+#                 proxy_server = f"http://{ip}:{port}"
+#                 proxy_user = user
+#                 proxy_pass = pw
+#             elif len(parts) == 2:
+#                 ip, port = parts
+#                 proxy_server = f"http://{ip}:{port}"
     
-        print(f"Proxy: {proxy} | proxy_server: {proxy_server} | proxy_user: {proxy_user} | proxy_pass: {proxy_pass}")
+#         print(f"Proxy: {proxy} | proxy_server: {proxy_server} | proxy_user: {proxy_user} | proxy_pass: {proxy_pass}")
     
-        launch_args = dict(headless=True)
-        if proxy_server:
-            launch_args['proxy'] = {
-                "server": proxy_server,
-            }
-            if proxy_user and proxy_pass:
-                launch_args['proxy']['username'] = proxy_user
-                launch_args['proxy']['password'] = proxy_pass
+#         launch_args = dict(headless=True)
+#         if proxy_server:
+#             launch_args['proxy'] = {
+#                 "server": proxy_server,
+#             }
+#             if proxy_user and proxy_pass:
+#                 launch_args['proxy']['username'] = proxy_user
+#                 launch_args['proxy']['password'] = proxy_pass
     
-        browser = await p.chromium.launch(**launch_args)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
-        )
-        page = await context.new_page()
-        await page.goto('https://www.youtube.com', timeout=30000)
-        await page.wait_for_timeout(5000)
-        cookies = await context.cookies()
-        await browser.close()
-        cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
-        YOUTUBE_COOKIE_CACHE[key] = {"cookie": cookie_str, "timestamp": now}
-        return cookie_str
+#         browser = await p.chromium.launch(**launch_args)
+#         context = await browser.new_context(
+#             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
+#         )
+#         page = await context.new_page()
+#         await page.goto('https://www.youtube.com', timeout=30000)
+#         await page.wait_for_timeout(5000)
+#         cookies = await context.cookies()
+#         await browser.close()
+#         cookie_str = '; '.join([f"{c['name']}={c['value']}" for c in cookies])
+#         YOUTUBE_COOKIE_CACHE[key] = {"cookie": cookie_str, "timestamp": now}
+#         return cookie_str
         
-from flask import g
+# from flask import g
 
-async def get_request_youtube_cookie(proxy=None):
-    if hasattr(g, "youtube_cookie") and g.youtube_cookie:
-        return g.youtube_cookie
-    cookie_str = await get_youtube_cookies_playwright(proxy=proxy)
-    g.youtube_cookie = cookie_str
-    return cookie_str
+# async def get_request_youtube_cookie(proxy=None):
+#     if hasattr(g, "youtube_cookie") and g.youtube_cookie:
+#         return g.youtube_cookie
+#     cookie_str = await get_youtube_cookies_playwright(proxy=proxy)
+#     g.youtube_cookie = cookie_str
+#     return cookie_str
 
 def get_random_headers(extra_cookie=None):
     headers = {
@@ -1769,8 +1769,8 @@ async def clean_ytdl_options():
         "extractor_retries": 5,
         "socket_timeout": 15,
         "extract_flat": "in_playlist",
-        "user_agent": headers["User-Agent"],
-        "headers": headers,
+        # "user_agent": headers["User-Agent"],
+        # "headers": headers,
         "http_headers": headers,
         "proxy": proxy_url,  # Use the formatted proxy URL!
     }
@@ -2321,37 +2321,32 @@ def youtube():
 
 @app.route("/stream/<stream_id>", methods=["GET"])
 def stream_media(stream_id):
-    """Stream media from YouTube"""
     stream_key = f"stream:{stream_id}"
     stream_data = cache.get(stream_key)
-    
     if not stream_data:
         return jsonify({"error": "Stream not found or expired"}), 404
-    
+
     url = stream_data.get("url")
     is_video = stream_data.get("is_video", False)
-    
     if not url:
         return jsonify({"error": "Invalid stream URL"}), 500
-    
-    # Set appropriate content type
-    content_type = "video/mp4" if is_video else "audio/mp4"
-    
 
-def generate():
-    try:
-        buffer_size = 1024 * 1024  # 1MB
-        headers["Range"] = request.headers.get("Range", "bytes=0-")
-        proxies = {"all": f"http://{proxy}"} if proxy else None
-        with httpx.stream("GET", url, headers=headers, proxies=proxies, timeout=30) as response:
+    content_type = "video/mp4" if is_video else "audio/mp4"
+    headers = get_random_headers()
+    headers["Range"] = request.headers.get("Range", "bytes=0-")
+    proxy = get_rotating_proxy()
+    proxies = {"all": proxy} if proxy else None
+
+    def generate():
+        try:
+            buffer_size = 1024 * 1024  # 1MB
+            with httpx.stream("GET", url, headers=headers, proxies=proxies, timeout=30) as response:
+                for chunk in response.iter_bytes(chunk_size=buffer_size):
+                    yield chunk
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
             yield b""
-            for chunk in response.iter_bytes(chunk_size=buffer_size):
-                yield chunk
-    except Exception as e:
-        logger.error(f"Streaming error: {e}")
-        yield b""
-    
-    # Create a streaming response
+
     return Response(
         stream_with_context(generate()),
         content_type=content_type,
