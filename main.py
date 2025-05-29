@@ -1662,7 +1662,9 @@ async def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
                 launch_args['proxy']['password'] = proxy_pass
     
         browser = await p.chromium.launch(**launch_args)
-        context = await browser.new_context()
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36"
+        )
         page = await context.new_page()
         await page.goto('https://www.youtube.com', timeout=30000)
         await page.wait_for_timeout(5000)
