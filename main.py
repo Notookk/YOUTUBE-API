@@ -1747,17 +1747,9 @@ def cached(timeout=CACHE_TIMEOUT):
         return wrapper
     return decorator
 
-# async def clean_ytdl_options():
-#     proxy_url = None  # Force no proxy
-#     headers = get_random_headers()
-#     return {
-#         "http_headers": headers,
-#         "proxy": proxy_url,
-#     }
-
 async def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    proxy_url = None
+    proxy_url = 
     if proxy:
         parts = proxy.replace("http://", "").split(":")
         if len(parts) == 4:
@@ -1936,15 +1928,13 @@ class YouTubeAPIService:
     list_base = "https://youtube.com/playlist?list="
     
     @staticmethod
-    async def search_videos(query, limit=1):
-        """Search YouTube videos"""
+    async def search_videos(query, limit=1, max_retries=3):
+        """Search YouTube videos with enhanced error handling and retries"""
         try:
             await add_jitter(1)
             
             # Special handling for common search terms
             if query.lower() == '295':
-                # This is a hardcoded entry for "295" by Sidhu Moose Wala
-                # Ensures this specific popular search always works
                 return [{
                     "id": "n_FCrCQ6-bA",
                     "title": "295 (Official Audio) | Sidhu Moose Wala | The Kidd | Moosetape",
@@ -1956,58 +1946,75 @@ class YouTubeAPIService:
                     "thumbnail": "https://i.ytimg.com/vi_webp/n_FCrCQ6-bA/maxresdefault.webp",
                     "link": "https://www.youtube.com/watch?v=n_FCrCQ6-bA",
                 }]
-            
-            # Use yt-dlp for search to avoid proxy issues
+
+            # Configure yt-dlp with robust settings
             options = await clean_ytdl_options()
             options.update({
                 "quiet": True,
                 "no_warnings": True,
                 "extract_flat": True,
                 "default_search": "ytsearch",
-                "skip_download": True
-            })
-            
-            search_term = f"ytsearch{limit}:{query}"
-            
-            with yt_dlp.YoutubeDL(options) as ydl:
-                search_results = ydl.extract_info(search_term, download=False)
-                
-                if not search_results or 'entries' not in search_results:
-                    return []
-                
-                videos = []
-                for entry in search_results['entries']:
-                    if not entry:
-                        continue
-                        
-                    video_id = entry.get('id', '')
-                    title = entry.get('title', 'Unknown')
-                    duration = entry.get('duration', 0)
-                    duration_text = str(datetime.timedelta(seconds=duration)) if duration else "0:00"
-                    if duration_text.startswith('0:'):
-                        duration_text = duration_text[2:]
-                    
-                    views = entry.get('view_count', 0)
-                    channel = entry.get('uploader', '')
-                    thumbnail = entry.get('thumbnail', '')
-                    link = f"https://www.youtube.com/watch?v={video_id}"
-                    
-                    video = {
-                        "id": video_id,
-                        "title": title,
-                        "duration": duration,
-                        "duration_text": duration_text,
-                        "views": views,
-                        "publish_time": entry.get('upload_date', ''),
-                        "channel": channel,
-                        "thumbnail": thumbnail,
-                        "link": link,
+                "skip_download": True,
+                "ignoreerrors": True,  # Continue despite errors
+                "retries": 3,  # Automatic retries
+                "fragment_retries": 3,
+                "extractor_args": {
+                    "youtube": {
+                        "skip": ["dash", "hls"]  # Skip problematic formats
                     }
-                    videos.append(video)
-                
-                return videos
+                }
+            })
+
+            search_term = f"ytsearch{limit}:{query}"
+            last_error = None
+
+            # Retry loop
+            for attempt in range(max_retries):
+                try:
+                    with yt_dlp.YoutubeDL(options) as ydl:
+                        search_results = ydl.extract_info(search_term, download=False)
+                        
+                        if not search_results or 'entries' not in search_results:
+                            logger.warning(f"No results found for '{query}' (attempt {attempt + 1})")
+                            continue
+                        
+                        videos = []
+                        for entry in search_results['entries']:
+                            if not entry or not entry.get('id'):
+                                continue
+                                
+                            # Format duration properly
+                            duration = entry.get('duration', 0)
+                            duration_text = str(datetime.timedelta(seconds=duration))[2:] if duration else "0:00"
+                            
+                            videos.append({
+                                "id": entry['id'],
+                                "title": entry.get('title', 'Unknown'),
+                                "duration": duration,
+                                "duration_text": duration_text,
+                                "views": entry.get('view_count', 0),
+                                "publish_time": entry.get('upload_date', ''),
+                                "channel": entry.get('uploader', ''),
+                                "thumbnail": entry.get('thumbnail', ''),
+                                "link": f"https://www.youtube.com/watch?v={entry['id']}",
+                            })
+                        
+                        if videos:  # Return if we got any results
+                            return videos
+                        
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
+
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Attempt {attempt + 1} failed for '{query}': {str(e)}")
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+
+            logger.error(f"All attempts failed for '{query}'. Last error: {str(last_error)}")
+            return []  # Return empty list after all retries
+
         except Exception as e:
-            logger.error(f"Error searching videos: {e}")
+            logger.error(f"Unexpected error in search_videos for '{query}': {str(e)}", exc_info=True)
             return []
     
     @staticmethod
@@ -2245,30 +2252,38 @@ def admin_panel():
 @app.route("/youtube", methods=["GET"])
 @required_api_key
 def youtube():
+    """Main YouTube endpoint that supports both search and direct video access"""
     query = request.args.get("query")
     video = request.args.get("video", "false").lower() == "true"
     
     if not query:
         return jsonify({"error": "Query parameter is required"}), 400
-
-    # Debug: Show available methods on the class
-    print("YouTubeAPIService attrs:", dir(YouTubeAPIService))
-    if not hasattr(YouTubeAPIService, "search_videos"):
-        return jsonify({"error": "YouTubeAPIService.search_videos not found!"}), 500
     
+    # Determine if this is a search query or a direct video ID/URL
     is_url = is_youtube_url(query)
     is_video_id = re.match(r'^[a-zA-Z0-9_-]{11}$', query)
     
     try:
+        # Handle search case
         if not is_url and not is_video_id:
+            # Search for videos
             search_results = run_async(YouTubeAPIService.search_videos, query, limit=1)
+            
             if not search_results:
                 return jsonify({"error": "No videos found"}), 404
+            
             video_data = search_results[0]
+            
+            # Get stream URL
             stream_url = run_async(YouTubeAPIService.get_stream_url, video_data["link"], is_video=video)
+            
             if not stream_url:
                 return jsonify({"error": "Failed to get stream URL"}), 500
+            
+            # Format the host URL for the response
             host_url = request.host_url.rstrip("/")
+            
+            # Format response to match exactly the requested format
             response = {
                 "id": video_data["id"],
                 "title": video_data["title"],
@@ -2280,16 +2295,28 @@ def youtube():
                 "stream_url": host_url + stream_url,
                 "stream_type": "Video" if video else "Audio"
             }
+            
             return jsonify(response)
-        # direct video case...
+        
+        # Handle direct video case
         video_url = query if is_url else f"https://www.youtube.com/watch?v={query}"
+        
+        # Get video details
         video_details = run_async(YouTubeAPIService.get_details, video_url)
+        
         if not video_details or not video_details.get("id"):
             return jsonify({"error": "No video found"}), 404
+            
+        # Get stream URL
         stream_url = run_async(YouTubeAPIService.get_stream_url, video_url, is_video=video)
+        
         if not stream_url:
             return jsonify({"error": "Failed to get stream URL"}), 500
+        
+        # Format the host URL for the response
         host_url = request.host_url.rstrip("/")
+        
+        # Format response to match exactly the requested format
         response = {
             "id": video_details["id"],
             "title": video_details["title"],
@@ -2301,6 +2328,7 @@ def youtube():
             "stream_url": host_url + stream_url,
             "stream_type": "Video" if video else "Audio"
         }
+        
         return jsonify(response)
     except Exception as e:
         logger.error(f"Error in YouTube endpoint: {e}")
