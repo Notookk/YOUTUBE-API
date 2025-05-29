@@ -1769,12 +1769,28 @@ async def clean_ytdl_options():
         "extractor_retries": 5,
         "socket_timeout": 15,
         "extract_flat": "in_playlist",
-        # "user_agent": headers["User-Agent"],
-        # "headers": headers,
-        "http_headers": headers,
-        "proxy": proxy_url,  # Use the formatted proxy URL!
+        "user_agent": get_random_user_agent(),
+        "headers": {
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Mode": "navigate",
+            "Referer": "https://www.google.com/"
+        },
+        "http_headers": {
+            "User-Agent": get_random_user_agent(),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Mode": "navigate",
+            "Referer": "https://www.google.com/"
+        },
+        # Add these new options:
+        "force_ipv4": True,
+        "compat_opts": ["no-youtube-unavailable-videos"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android"],
+                "skip": ["hls", "dash"]
+            }
+        }
     }
-
 def time_to_seconds(time_str):
     """Convert time string to seconds"""
     if not time_str or time_str == "None":
