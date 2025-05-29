@@ -2237,38 +2237,30 @@ def admin_panel():
 @app.route("/youtube", methods=["GET"])
 @required_api_key
 def youtube():
-    """Main YouTube endpoint that supports both search and direct video access"""
     query = request.args.get("query")
     video = request.args.get("video", "false").lower() == "true"
     
     if not query:
         return jsonify({"error": "Query parameter is required"}), 400
+
+    # Debug: Show available methods on the class
+    print("YouTubeAPIService attrs:", dir(YouTubeAPIService))
+    if not hasattr(YouTubeAPIService, "search_videos"):
+        return jsonify({"error": "YouTubeAPIService.search_videos not found!"}), 500
     
-    # Determine if this is a search query or a direct video ID/URL
     is_url = is_youtube_url(query)
     is_video_id = re.match(r'^[a-zA-Z0-9_-]{11}$', query)
     
     try:
-        # Handle search case
         if not is_url and not is_video_id:
-            # Search for videos
             search_results = run_async(YouTubeAPIService.search_videos, query, limit=1)
-            
             if not search_results:
                 return jsonify({"error": "No videos found"}), 404
-            
             video_data = search_results[0]
-            
-            # Get stream URL
             stream_url = run_async(YouTubeAPIService.get_stream_url, video_data["link"], is_video=video)
-            
             if not stream_url:
                 return jsonify({"error": "Failed to get stream URL"}), 500
-            
-            # Format the host URL for the response
             host_url = request.host_url.rstrip("/")
-            
-            # Format response to match exactly the requested format
             response = {
                 "id": video_data["id"],
                 "title": video_data["title"],
@@ -2280,28 +2272,16 @@ def youtube():
                 "stream_url": host_url + stream_url,
                 "stream_type": "Video" if video else "Audio"
             }
-            
             return jsonify(response)
-        
-        # Handle direct video case
+        # direct video case...
         video_url = query if is_url else f"https://www.youtube.com/watch?v={query}"
-        
-        # Get video details
         video_details = run_async(YouTubeAPIService.get_details, video_url)
-        
         if not video_details or not video_details.get("id"):
             return jsonify({"error": "No video found"}), 404
-            
-        # Get stream URL
         stream_url = run_async(YouTubeAPIService.get_stream_url, video_url, is_video=video)
-        
         if not stream_url:
             return jsonify({"error": "Failed to get stream URL"}), 500
-        
-        # Format the host URL for the response
         host_url = request.host_url.rstrip("/")
-        
-        # Format response to match exactly the requested format
         response = {
             "id": video_details["id"],
             "title": video_details["title"],
@@ -2313,7 +2293,6 @@ def youtube():
             "stream_url": host_url + stream_url,
             "stream_type": "Video" if video else "Audio"
         }
-        
         return jsonify(response)
     except Exception as e:
         logger.error(f"Error in YouTube endpoint: {e}")
