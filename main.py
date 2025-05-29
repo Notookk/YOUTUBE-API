@@ -1958,6 +1958,12 @@ class YouTubeAPIService:
                     if result:
                         return result
 
+                    # Approach 3: Direct HTML scraping as last resort
+                    if attempt == max_retries - 1:
+                        result = await YouTubeAPIService._try_direct_scrape(query, limit)
+                        if result:
+                            return result
+
                     await asyncio.sleep(2 ** attempt)  # Exponential backoff
 
                 except Exception as e:
@@ -2031,6 +2037,38 @@ class YouTubeAPIService:
                 return YouTubeAPIService._process_results(search_results)
         except Exception as e:
             logger.debug(f"Alternative extractor failed for '{query}': {str(e)}")
+            return None
+
+    @staticmethod
+    async def _try_direct_scrape(query, limit):
+        """Fallback to direct HTML scraping"""
+        try:
+            url = f"https://www.youtube.com/results?search_query={query}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "en-US,en;q=0.9"
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=headers, timeout=10)
+                if response.status_code != 200:
+                    return None
+                
+                # Extract video IDs from HTML
+                video_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', response.text)
+                if not video_ids:
+                    return None
+                
+                # Get details for each video
+                results = []
+                for vid in video_ids[:limit]:
+                    details = await YouTubeAPIService.get_details(f"https://youtube.com/watch?v={vid}")
+                    if details:
+                        results.append(details)
+                
+                return results
+        except Exception as e:
+            logger.debug(f"Direct scrape failed for '{query}': {str(e)}")
             return None
 
     @staticmethod
