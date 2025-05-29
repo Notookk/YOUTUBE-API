@@ -1636,30 +1636,33 @@ async def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
         return cached["cookie"]
 
     async with async_playwright() as p:
-        browser_args = []
         proxy_server = None
-        proxy_auth = None
+        proxy_user = None
+        proxy_pass = None
         if proxy:
             parts = proxy.replace("http://", "").split(":")
             if len(parts) == 4:
                 ip, port, user, pw = parts
-                proxy_server = f"{ip}:{port}"
-                proxy_auth = f"{user}:{pw}"
+                proxy_server = f"http://{ip}:{port}"
+                proxy_user = user
+                proxy_pass = pw
             elif len(parts) == 2:
                 ip, port = parts
-                proxy_server = f"{ip}:{port}"
-        print(f"Proxy: {proxy} | proxy_server: {proxy_server} | proxy_auth: {proxy_auth}")
-        if proxy_server and re.match(r"^\d+\.\d+\.\d+\.\d+:\d+$", proxy_server):
-            browser_args.append(f'--proxy-server={proxy_server}')
-        else:
-            proxy_server = None
-        browser = await p.chromium.launch(headless=True, args=browser_args)
+                proxy_server = f"http://{ip}:{port}"
+    
+        print(f"Proxy: {proxy} | proxy_server: {proxy_server} | proxy_user: {proxy_user} | proxy_pass: {proxy_pass}")
+    
+        launch_args = dict(headless=True)
+        if proxy_server:
+            launch_args['proxy'] = {
+                "server": proxy_server,
+            }
+            if proxy_user and proxy_pass:
+                launch_args['proxy']['username'] = proxy_user
+                launch_args['proxy']['password'] = proxy_pass
+    
+        browser = await p.chromium.launch(**launch_args)
         context = await browser.new_context()
-        if proxy_auth:
-            basic = base64.b64encode(proxy_auth.encode()).decode()
-            await context.set_extra_http_headers({
-                "Proxy-Authorization": f"Basic {basic}"
-            })
         page = await context.new_page()
         await page.goto('https://www.youtube.com', timeout=30000)
         await page.wait_for_timeout(5000)
