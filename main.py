@@ -1749,7 +1749,7 @@ def cached(timeout=CACHE_TIMEOUT):
 
 async def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    proxy_url = 
+    proxy_url = None
     if proxy:
         parts = proxy.replace("http://", "").split(":")
         if len(parts) == 4:
