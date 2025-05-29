@@ -1648,7 +1648,7 @@ async def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
             elif len(parts) == 2:
                 ip, port = parts
                 proxy_server = f"{ip}:{port}"
-        
+        print(f"Proxy: {proxy} | proxy_server: {proxy_server} | proxy_auth: {proxy_auth}")
         if proxy_server and re.match(r"^\d+\.\d+\.\d+\.\d+:\d+$", proxy_server):
             browser_args.append(f'--proxy-server={proxy_server}')
         else:
