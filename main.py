@@ -150,7 +150,7 @@ def get_rotating_proxy():
         parts = proxy_line.split(":")
         if len(parts) == 4 and parts[1].isdigit():
             ip, port, user, pw = parts
-            return f"http://{user}:{pw}@{ip}:{port}"
+            return f"{ip}:{port}:{user}:{pw}"
         elif len(parts) == 2 and parts[1].isdigit():
             ip, port = parts
             return f"http://{ip}:{port}"
@@ -1637,10 +1637,27 @@ async def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
 
     async with async_playwright() as p:
         browser_args = []
+        proxy_server = None
+        proxy_auth = None
         if proxy:
-            browser_args.append(f'--proxy-server={proxy}')
+            parts = proxy.replace("http://", "").split(":")
+            if len(parts) == 4:
+                ip, port, user, pw = parts
+                proxy_server = f"{ip}:{port}"
+                proxy_auth = f"{user}:{pw}"
+            elif len(parts) == 2:
+                ip, port = parts
+                proxy_server = f"{ip}:{port}"
+        
+        if proxy_server:
+            browser_args.append(f'--proxy-server={proxy_server}')
         browser = await p.chromium.launch(headless=True, args=browser_args)
         context = await browser.new_context()
+        if proxy_auth:
+            basic = base64.b64encode(proxy_auth.encode()).decode()
+            await context.set_extra_http_headers({
+                "Proxy-Authorization": f"Basic {basic}"
+            })
         page = await context.new_page()
         await page.goto('https://www.youtube.com', timeout=30000)
         await page.wait_for_timeout(5000)
