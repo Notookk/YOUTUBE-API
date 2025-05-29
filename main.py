@@ -1923,7 +1923,7 @@ def required_admin_key(func):
     return decorated_function
 
 class YouTubeAPIService:
-    """Service class with ultimate fallback mechanisms for YouTube operations"""
+    """Service class with ultimate reliability for YouTube operations"""
 
     @staticmethod
     async def search_videos(query, limit=1, max_retries=3):
@@ -1949,22 +1949,18 @@ class YouTubeAPIService:
                 }]
 
             # Try different approaches
+            results = []
             for attempt in range(max_retries):
                 try:
-                    # 1. Try direct HTML scraping first (most reliable currently)
-                    result = await YouTubeAPIService._try_direct_scrape(query, limit)
-                    if result:
-                        return result
+                    # 1. Try direct HTML scraping first (most reliable)
+                    results = await YouTubeAPIService._try_direct_scrape(query, limit)
+                    if results:
+                        return results
 
                     # 2. Try standard yt-dlp search
-                    result = await YouTubeAPIService._try_standard_search(query, limit)
-                    if result:
-                        return result
-
-                    # 3. Try alternative extractor configuration
-                    result = await YouTubeAPIService._try_alternative_extractor(query, limit)
-                    if result:
-                        return result
+                    results = await YouTubeAPIService._try_standard_search(query, limit)
+                    if results:
+                        return results
 
                     await asyncio.sleep(2 ** attempt)  # Exponential backoff
 
@@ -1972,16 +1968,76 @@ class YouTubeAPIService:
                     logger.warning(f"Attempt {attempt + 1} failed for '{query}': {str(e)}")
                     continue
 
-            logger.error(f"All search methods failed for '{query}'")
-            return []
+            if not results:
+                logger.error(f"All search methods failed for '{query}'")
+                return []
+
+            return results
 
         except Exception as e:
             logger.error(f"Unexpected error in search_videos: {str(e)}", exc_info=True)
             return []
 
     @staticmethod
+    async def _try_direct_scrape(query, limit):
+        """Primary reliable search method using direct HTML scraping"""
+        try:
+            url = f"https://www.youtube.com/results?search_query={query}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "en-US,en;q=0.9"
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=headers, timeout=15)
+                if response.status_code != 200:
+                    return None
+                
+                # Multiple patterns to extract video information from HTML
+                video_data = re.findall(
+                    r'"videoRenderer":{"videoId":"(.{11})".*?"title":{"runs":\[{"text":"([^"]+)"}.*?'
+                    r'"viewCountText":{"simpleText":"([^"]+)"}.*?'
+                    r'"lengthText":{"accessibility":{"accessibilityData":{"label":"([^"]+)"}}',
+                    response.text
+                )
+                
+                if not video_data:
+                    return None
+                
+                # Process the first 'limit' results
+                results = []
+                for vid, title, views, duration in video_data[:limit]:
+                    try:
+                        # Basic duration conversion (HH:MM:SS to seconds)
+                        duration_sec = sum(
+                            int(x) * 60 ** i for i, x in enumerate(
+                                reversed(duration.split(':'))
+                            )
+                        )
+                        
+                        results.append({
+                            "id": vid,
+                            "title": title,
+                            "duration": duration_sec,
+                            "duration_text": duration,
+                            "views": clean_view_count(views),
+                            "channel": "Unknown",  # Will be updated by get_details
+                            "thumbnail": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+                            "link": f"https://www.youtube.com/watch?v={vid}"
+                        })
+                    except Exception as e:
+                        logger.debug(f"Error processing video {vid}: {str(e)}")
+                        continue
+                
+                return results
+
+        except Exception as e:
+            logger.debug(f"Direct scrape failed for '{query}': {str(e)}")
+            return None
+
+    @staticmethod
     async def _try_standard_search(query, limit):
-        """Standard yt-dlp search with robust configuration"""
+        """Fallback to yt-dlp when direct scraping fails"""
         try:
             options = {
                 "quiet": True,
@@ -2006,77 +2062,6 @@ class YouTubeAPIService:
             return None
 
     @staticmethod
-    async def _try_alternative_extractor(query, limit):
-        """Alternative client configuration"""
-        try:
-            options = {
-                "quiet": True,
-                "ignoreerrors": True,
-                "extract_flat": True,
-                "default_search": "ytsearch",
-                "skip_download": True,
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": ["android"],
-                        "skip": ["dash", "hls", "livestreams"]
-                    }
-                },
-                "proxy": None  # Try without proxy
-            }
-            
-            with yt_dlp.YoutubeDL(options) as ydl:
-                results = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-                return YouTubeAPIService._process_results(results)
-        except Exception as e:
-            logger.debug(f"Alternate extractor failed for '{query}': {str(e)}")
-            return None
-
-    @staticmethod
-    async def _try_direct_scrape(query, limit):
-        """Primary search method using direct HTML scraping"""
-        try:
-            url = f"https://www.youtube.com/results?search_query={query}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept-Language": "en-US,en;q=0.9"
-            }
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, headers=headers, timeout=10)
-                if response.status_code != 200:
-                    return None
-                
-                # Multiple patterns to extract video IDs from HTML
-                patterns = [
-                    r'"videoId":"([a-zA-Z0-9_-]{11})"',
-                    r'\/watch\?v=([a-zA-Z0-9_-]{11})',
-                    r'data-video-id="([a-zA-Z0-9_-]{11})"'
-                ]
-                
-                video_ids = []
-                for pattern in patterns:
-                    video_ids.extend(re.findall(pattern, response.text))
-                
-                if not video_ids:
-                    return None
-                
-                # Get details for each video (remove duplicates)
-                results = []
-                for vid in list(dict.fromkeys(video_ids))[:limit]:
-                    try:
-                        details = await YouTubeAPIService.get_details(f"https://youtube.com/watch?v={vid}")
-                        if details:
-                            results.append(details)
-                    except Exception as e:
-                        logger.debug(f"Failed to get details for video {vid}: {str(e)}")
-                        continue
-                
-                return results
-        except Exception as e:
-            logger.debug(f"Direct scrape failed for '{query}': {str(e)}")
-            return None
-
-    @staticmethod
     def _process_results(data):
         """Standardize results format"""
         if not data or 'entries' not in data:
@@ -2088,26 +2073,31 @@ class YouTubeAPIService:
             "duration": e.get('duration', 0),
             "duration_text": str(datetime.timedelta(seconds=e.get('duration', 0)))[2:],
             "views": e.get('view_count', 0),
-            "channel": e.get('uploader', ''),
+            "channel": e.get('uploader', 'Unknown'),
             "thumbnail": e.get('thumbnail', ''),
             "link": f"https://youtube.com/watch?v={e['id']}",
         } for e in data['entries'] if e and e.get('id')]
 
     @staticmethod
     async def get_details(url, video_id=None):
-        """Robust video details extraction with fallback"""
+        """Robust video details extraction with multiple fallbacks"""
         try:
             if video_id:
                 url = f"https://www.youtube.com/watch?v={video_id}"
             
-            # First try yt-dlp
+            # First try minimal yt-dlp request
             try:
                 options = {
                     "quiet": True,
                     "no_warnings": True,
                     "skip_download": True,
                     "extract_flat": True,
-                    "ignoreerrors": True
+                    "ignoreerrors": True,
+                    "extractor_args": {
+                        "youtube": {
+                            "player_client": ["web"]
+                        }
+                    }
                 }
                 with yt_dlp.YoutubeDL(options) as ydl:
                     info = ydl.extract_info(url, download=False)
@@ -2117,15 +2107,15 @@ class YouTubeAPIService:
                             "title": info.get("title", "Unknown"),
                             "duration": info.get("duration", 0),
                             "duration_text": str(datetime.timedelta(seconds=info.get("duration", 0)))[2:],
-                            "channel": info.get("uploader", ""),
+                            "channel": info.get("uploader", "Unknown"),
                             "views": info.get("view_count", 0),
-                            "thumbnail": info.get("thumbnail", ""),
+                            "thumbnail": info.get("thumbnail", f"https://i.ytimg.com/vi/{info.get('id', '')}/hqdefault.jpg"),
                             "link": f"https://www.youtube.com/watch?v={info.get('id', '')}"
                         }
             except:
                 pass
             
-            # Fallback to direct HTTP if yt-dlp fails
+            # Fallback to basic information if yt-dlp fails
             video_id = video_id or extract_video_id(url)
             if video_id:
                 return {
@@ -2133,7 +2123,7 @@ class YouTubeAPIService:
                     "title": "Unknown",
                     "duration": 0,
                     "duration_text": "0:00",
-                    "channel": "",
+                    "channel": "Unknown",
                     "views": 0,
                     "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
                     "link": f"https://www.youtube.com/watch?v={video_id}"
@@ -2143,6 +2133,30 @@ class YouTubeAPIService:
         except Exception as e:
             logger.error(f"Error in get_details: {str(e)}")
             return None
+
+
+def clean_view_count(view_str):
+    """Convert view count strings to integers"""
+    if not view_str:
+        return 0
+    try:
+        return int(re.sub(r'[^0-9]', '', view_str.split()[0]))
+    except:
+        return 0
+
+
+def extract_video_id(url):
+    """Extract video ID from URL"""
+    patterns = [
+        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([^&\n?#]+)',
+        r'youtube\.com/watch.*?v=([^&\n?#]+)',
+        r'youtube\.com/shorts/([^&\n?#]+)'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
     
     @staticmethod
     @cached()
