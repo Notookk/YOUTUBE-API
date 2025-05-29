@@ -1749,6 +1749,17 @@ def cached(timeout=CACHE_TIMEOUT):
 
 async def clean_ytdl_options():
     proxy = get_rotating_proxy()
+    # ADD THIS:
+    proxy_url = None
+    if proxy:
+        parts = proxy.replace("http://", "").split(":")
+        if len(parts) == 4:
+            ip, port, user, pw = parts
+            proxy_url = f"http://{user}:{pw}@{ip}:{port}"
+        elif len(parts) == 2:
+            ip, port = parts
+            proxy_url = f"http://{ip}:{port}"
+    # use proxy_url instead of proxy below
     cookie_str = await get_request_youtube_cookie(proxy=proxy)
     headers = get_random_headers(extra_cookie=cookie_str)
     return {
@@ -1764,7 +1775,7 @@ async def clean_ytdl_options():
         "user_agent": headers["User-Agent"],
         "headers": headers,
         "http_headers": headers,
-        "proxy": proxy if proxy else None,
+        "proxy": proxy_url,      # <--- CHANGE THIS LINE
         "cookie": cookie_str
     }
 
