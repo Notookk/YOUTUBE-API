@@ -1751,7 +1751,6 @@ async def clean_ytdl_options():
     proxy_url = None  # Force no proxy
     headers = get_random_headers()
     return {
-        ...
         "http_headers": headers,
         "proxy": proxy_url,
     }
