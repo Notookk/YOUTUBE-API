@@ -1649,8 +1649,10 @@ async def get_youtube_cookies_playwright(proxy=None, cache_minutes=10):
                 ip, port = parts
                 proxy_server = f"{ip}:{port}"
         
-        if proxy_server:
+        if proxy_server and re.match(r"^\d+\.\d+\.\d+\.\d+:\d+$", proxy_server):
             browser_args.append(f'--proxy-server={proxy_server}')
+        else:
+            proxy_server = None
         browser = await p.chromium.launch(headless=True, args=browser_args)
         context = await browser.new_context()
         if proxy_auth:
