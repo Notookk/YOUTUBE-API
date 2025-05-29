@@ -1749,7 +1749,6 @@ def cached(timeout=CACHE_TIMEOUT):
 
 async def clean_ytdl_options():
     proxy = get_rotating_proxy()
-    # ADD THIS:
     proxy_url = None
     if proxy:
         parts = proxy.replace("http://", "").split(":")
@@ -1759,9 +1758,7 @@ async def clean_ytdl_options():
         elif len(parts) == 2:
             ip, port = parts
             proxy_url = f"http://{ip}:{port}"
-    # use proxy_url instead of proxy below
-    cookie_str = await get_request_youtube_cookie(proxy=proxy)
-    headers = get_random_headers(extra_cookie=cookie_str)
+    headers = get_random_headers()
     return {
         "quiet": True,
         "no_warnings": True,
@@ -1775,8 +1772,7 @@ async def clean_ytdl_options():
         "user_agent": headers["User-Agent"],
         "headers": headers,
         "http_headers": headers,
-        "proxy": proxy_url,      # <--- CHANGE THIS LINE
-        "cookie": cookie_str
+        "proxy": proxy_url,  # Use the formatted proxy URL!
     }
 
 def time_to_seconds(time_str):
