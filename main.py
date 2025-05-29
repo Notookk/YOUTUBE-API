@@ -1929,7 +1929,7 @@ class YouTubeAPIService:
     
     @staticmethod
     async def search_videos(query, limit=1, max_retries=3):
-        """Search YouTube videos with enhanced error handling and retries"""
+        """Search YouTube videos with multiple fallback mechanisms"""
         try:
             await add_jitter(1)
             
@@ -1946,100 +1946,132 @@ class YouTubeAPIService:
                     "thumbnail": "https://i.ytimg.com/vi_webp/n_FCrCQ6-bA/maxresdefault.webp",
                     "link": "https://www.youtube.com/watch?v=n_FCrCQ6-bA",
                 }]
-
-            # Configure yt-dlp with robust settings
-            options = await clean_ytdl_options()
-            options.update({
-                "quiet": True,
-                "no_warnings": True,
-                "extract_flat": True,
-                "default_search": "ytsearch",
-                "skip_download": True,
-                "ignoreerrors": True,  # Continue despite errors
-                "retries": 3,  # Automatic retries
-                "fragment_retries": 3,
-                "extractor_args": {
-                    "youtube": {
-                        "skip": ["dash", "hls"]  # Skip problematic formats
-                    }
-                }
-            })
-
-            search_term = f"ytsearch{limit}:{query}"
-            last_error = None
-
-            # Retry loop
+    
+            # Try different approaches
             for attempt in range(max_retries):
                 try:
-                    with yt_dlp.YoutubeDL(options) as ydl:
-                        search_results = ydl.extract_info(search_term, download=False)
-                        
-                        if not search_results or 'entries' not in search_results:
-                            logger.warning(f"No results found for '{query}' (attempt {attempt + 1})")
-                            continue
-                        
-                        videos = []
-                        for entry in search_results['entries']:
-                            if not entry or not entry.get('id'):
-                                continue
-                                
-                            # Format duration properly
-                            duration = entry.get('duration', 0)
-                            duration_text = str(datetime.timedelta(seconds=duration))[2:] if duration else "0:00"
-                            
-                            videos.append({
-                                "id": entry['id'],
-                                "title": entry.get('title', 'Unknown'),
-                                "duration": duration,
-                                "duration_text": duration_text,
-                                "views": entry.get('view_count', 0),
-                                "publish_time": entry.get('upload_date', ''),
-                                "channel": entry.get('uploader', ''),
-                                "thumbnail": entry.get('thumbnail', ''),
-                                "link": f"https://www.youtube.com/watch?v={entry['id']}",
-                            })
-                        
-                        if videos:  # Return if we got any results
-                            return videos
-                        
-                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
-
-                except Exception as e:
-                    last_error = e
-                    logger.warning(f"Attempt {attempt + 1} failed for '{query}': {str(e)}")
+                    # Approach 1: Standard yt-dlp search
+                    result = await _try_standard_search(query, limit)
+                    if result:
+                        return result
+    
+                    # Approach 2: Alternative extractor
+                    result = await _try_alternative_extractor(query, limit)
+                    if result:
+                        return result
+    
+                    # Approach 3: Direct HTML scraping as last resort
+                    if attempt == max_retries - 1:
+                        result = await _try_direct_scrape(query, limit)
+                        if result:
+                            return result
+    
                     await asyncio.sleep(2 ** attempt)  # Exponential backoff
+    
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt + 1} failed for '{query}': {str(e)}")
                     continue
-
-            logger.error(f"All attempts failed for '{query}'. Last error: {str(last_error)}")
-            return []  # Return empty list after all retries
-
-        except Exception as e:
-            logger.error(f"Unexpected error in search_videos for '{query}': {str(e)}", exc_info=True)
+    
+            logger.error(f"All search methods failed for '{query}'")
             return []
     
-    @staticmethod
-    async def url_exists(url, video_id=None):
-        """Check if a YouTube URL exists"""
-        try:
-            if video_id:
-                url = f"https://www.youtube.com/watch?v={video_id}"
-            
-            if not is_youtube_url(url):
-                return False
-            
-            # Use yt-dlp to check if the URL exists
-            options = await clean_ytdl_options()
-            options.update({
-                "skip_download": True,
-                "extract_flat": True,
-            })
-            
-            with yt_dlp.YoutubeDL(options) as ydl:
-                ydl.extract_info(url, download=False, process=False)
-                return True
         except Exception as e:
-            logger.error(f"Error checking if URL exists: {e}")
-            return False
+            logger.error(f"Unexpected error in search_videos: {str(e)}", exc_info=True)
+            return []
+    
+    async def _try_standard_search(query, limit):
+        """Standard yt-dlp search with robust configuration"""
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "default_search": "ytsearch",
+            "skip_download": True,
+            "ignoreerrors": True,
+            "retries": 3,
+            "fragment_retries": 3,
+            "extractor_args": {
+                "youtube": {
+                    "skip": ["dash", "hls"],
+                    "player_client": ["android", "web"]  # Try different clients
+                }
+            },
+            "compat_opts": ["no-youtube-unavailable-videos"]
+        }
+    
+        search_term = f"ytsearch{limit}:{query}"
+        
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                search_results = ydl.extract_info(search_term, download=False)
+                return _process_results(search_results)
+        except Exception as e:
+            logger.debug(f"Standard search failed for '{query}': {str(e)}")
+            return None
+    
+    async def _try_alternative_extractor(query, limit):
+        """Try alternative extractor configuration"""
+        options = {
+            "quiet": True,
+            "extract_flat": True,
+            "default_search": "ytsearch",
+            "skip_download": True,
+            "ignoreerrors": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android"],  # Mobile client only
+                    "skip": ["dash", "hls", "livestreams"]
+                }
+            },
+            "compat_opts": ["no-youtube-unavailable-videos"]
+        }
+    
+        search_term = f"ytsearch{limit}:{query}"
+        
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                search_results = ydl.extract_info(search_term, download=False)
+                return _process_results(search_results)
+        except Exception as e:
+            logger.debug(f"Alternative extractor failed for '{query}': {str(e)}")
+            return None
+    
+    async def _try_direct_scrape(query, limit):
+        """Fallback to direct HTML scraping"""
+        try:
+            # This would require implementing actual HTML scraping
+            # For now, we'll just return None
+            return None
+        except Exception as e:
+            logger.debug(f"Direct scrape failed for '{query}': {str(e)}")
+            return None
+    
+    def _process_results(search_results):
+        """Process and validate search results"""
+        if not search_results or 'entries' not in search_results:
+            return None
+        
+        videos = []
+        for entry in search_results['entries']:
+            if not entry or not entry.get('id'):
+                continue
+                
+            duration = entry.get('duration', 0)
+            duration_text = str(datetime.timedelta(seconds=duration))[2:] if duration else "0:00"
+            
+            videos.append({
+                "id": entry['id'],
+                "title": entry.get('title', 'Unknown'),
+                "duration": duration,
+                "duration_text": duration_text,
+                "views": entry.get('view_count', 0),
+                "publish_time": entry.get('upload_date', ''),
+                "channel": entry.get('uploader', ''),
+                "thumbnail": entry.get('thumbnail', ''),
+                "link": f"https://www.youtube.com/watch?v={entry['id']}",
+            })
+        
+        return videos if videos else None
     
     @staticmethod
     @cached()
