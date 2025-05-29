@@ -1748,32 +1748,41 @@ def cached(timeout=CACHE_TIMEOUT):
     return decorator
 
 async def clean_ytdl_options():
-    proxy = get_rotating_proxy()
-    proxy_url = None
-    if proxy:
-        parts = proxy.replace("http://", "").split(":")
-        if len(parts) == 4:
-            ip, port, user, pw = parts
-            proxy_url = f"http://{user}:{pw}@{ip}:{port}"
-        elif len(parts) == 2:
-            ip, port = parts
-            proxy_url = f"http://{ip}:{port}"
+    proxy_url = None  # Force no proxy
     headers = get_random_headers()
     return {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "nocheckcertificate": True,
-        "geo_bypass": True,
-        "geo_bypass_country": "US",
-        "extractor_retries": 5,
-        "socket_timeout": 15,
-        "extract_flat": "in_playlist",
-        # "user_agent": headers["User-Agent"],
-        # "headers": headers,
+        ...
         "http_headers": headers,
-        "proxy": proxy_url,  # Use the formatted proxy URL!
+        "proxy": proxy_url,
     }
+
+# async def clean_ytdl_options():
+#     proxy = get_rotating_proxy()
+#     proxy_url = None
+#     if proxy:
+#         parts = proxy.replace("http://", "").split(":")
+#         if len(parts) == 4:
+#             ip, port, user, pw = parts
+#             proxy_url = f"http://{user}:{pw}@{ip}:{port}"
+#         elif len(parts) == 2:
+#             ip, port = parts
+#             proxy_url = f"http://{ip}:{port}"
+#     headers = get_random_headers()
+#     return {
+#         "quiet": True,
+#         "no_warnings": True,
+#         "noplaylist": True,
+#         "nocheckcertificate": True,
+#         "geo_bypass": True,
+#         "geo_bypass_country": "US",
+#         "extractor_retries": 5,
+#         "socket_timeout": 15,
+#         "extract_flat": "in_playlist",
+#         # "user_agent": headers["User-Agent"],
+#         # "headers": headers,
+#         "http_headers": headers,
+#         "proxy": proxy_url,  # Use the formatted proxy URL!
+#     }
 
 def time_to_seconds(time_str):
     """Convert time string to seconds"""
