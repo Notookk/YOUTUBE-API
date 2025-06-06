@@ -14,7 +14,7 @@ LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
 BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-CACHE_CHANNEL = -1002846625394   # Private channel, must be integer with -100 prefix
+CACHE_CHANNEL = -1002846625394
 WEB_PORT = 8000
 
 logging.basicConfig(
@@ -42,10 +42,9 @@ def check_admin_key():
 async def ensure_pyrogram_running():
     if not pyro_api.is_connected:
         await pyro_api.start()
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
 
-async def ensure_channel_ready():
-    """Ensure the bot knows the channel, or try to send a message if not."""
+async def ensure_channel_known():
     try:
         await pyro_api.get_chat(CACHE_CHANNEL)
         print("Bot already knows the cache channel.")
@@ -54,8 +53,11 @@ async def ensure_channel_ready():
             await pyro_api.send_message(CACHE_CHANNEL, "Initializing cache channel for bot (safe to delete this).")
             print("Initialization message sent to cache channel.")
         except Exception as e:
-            print(f"FATAL: Could not initialize channel - {e}")
-            print("Make sure the bot is a member/admin in the channel.")
+            print(f"\nFATAL: Could not access cache channel - Peer id invalid.\n"
+                  f"1. Make sure your bot is a member (or admin) in the channel.\n"
+                  f"2. The channel ID is correct and starts with -100.\n"
+                  f"3. Restart this script after fixing the above.\n"
+                  f"Error was: {e}")
             await pyro_api.stop()
             sys.exit(1)
     except Exception as e:
@@ -184,7 +186,6 @@ def download_video():
     loop.run_until_complete(cache_file_send(file_path, video_id, "mp4"))
     return send_file(file_path, as_attachment=True, download_name=f"{video_id}.mp4")
 
-# ----------- JSON Error Handlers for API endpoints -----------
 @app.errorhandler(404)
 def not_found(e):
     if request.path.startswith(("/search", "/download", "/admin")):
@@ -198,10 +199,9 @@ def server_error(e):
     return render_template("500.html"), 500
 
 if __name__ == "__main__":
-    # Startup: start Pyrogram and ensure channel is ready before Flask starts
     pyro_api.start()
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(ensure_channel_ready())
+    loop.run_until_complete(ensure_channel_known())
     print("Pyrogram session and cache channel ready. Starting Flask app!")
     app.run(host="0.0.0.0", port=WEB_PORT, debug=True)
     pyro_api.stop()
