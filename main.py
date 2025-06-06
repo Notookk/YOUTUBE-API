@@ -12,9 +12,8 @@ ADMIN_KEY = "XOTIK"
 LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
-BOT_TOKEN = "7918404318:AAGAusHpc8CZzs2LH254es-WoillmLiVSMs"
-# Use your real public channel username (no @) or private id (int, starts with -100)
-CACHE_CHANNEL = "yourchannelusername"
+BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
+CACHE_CHANNEL = "yourchannelusername"  # Set to your public channel username (no @), or -100... for private
 WEB_PORT = 8000
 
 logging.basicConfig(
@@ -181,8 +180,14 @@ def server_error(e):
     return render_template("500.html"), 500
 
 if __name__ == "__main__":
+    # Make sure no lock files exist before starting
+    for fname in ["api-helper.session-journal", "api-helper.session-shm", "api-helper.session-wal"]:
+        if os.path.exists(fname):
+            print(f"ERROR: Remove lock file {fname} before running this script!")
+            sys.exit(1)
     pyro_api.start()
     ensure_channel_known()
     print("Pyrogram session and cache channel ready. Starting Flask app!")
-    app.run(host="0.0.0.0", port=WEB_PORT, debug=True)
+    # CRITICAL: debug=False, use_reloader=False prevents multi-process/thread issues
+    app.run(host="0.0.0.0", port=WEB_PORT, debug=False, use_reloader=False)
     pyro_api.stop()
