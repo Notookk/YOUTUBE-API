@@ -5,7 +5,7 @@ import asyncio
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from ytube_api import Ytube
 from mongocache import get_cached_file, save_cached_file
-from pyrogram import Client
+from pyrogram import Client, errors
 
 API_KEY = "ishq_mein"
 ADMIN_KEY = "XOTIK"
@@ -13,7 +13,7 @@ LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
 BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-CACHE_CHANNEL = -1002846625394  # PRIVATE channel, use integer, not string
+CACHE_CHANNEL = -1002846625394  # Private channel, must be integer with -100 prefix
 WEB_PORT = 8000
 
 logging.basicConfig(
@@ -49,6 +49,7 @@ async def ensure_channel_known(client, channel_id):
     except Exception:
         try:
             await client.send_message(channel_id, "Initializing channel for bot cache (safe to delete)")
+            print(f"Initialization message sent to channel {channel_id}.")
         except Exception as e:
             print(f"Failed to initialize channel {channel_id}: {e}")
             raise
@@ -188,5 +189,22 @@ def server_error(e):
         return jsonify({"error": "Server error"}), 500
     return render_template("500.html"), 500
 
+# -------- Channel Initialization Logic --------
+def init_cache_channel():
+    print("Initializing cache channel (if not already initialized)...")
+    with Client("init-once", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN) as app:
+        try:
+            app.get_chat(CACHE_CHANNEL)
+            print("Bot already knows the channel.")
+        except errors.PeerIdInvalid:
+            try:
+                app.send_message(CACHE_CHANNEL, "Hello from bot! (channel is now initialized for Pyrogram)")
+                print("Initialization message sent to channel.")
+            except Exception as e:
+                print(f"Failed to initialize channel {CACHE_CHANNEL}: {e}")
+        except Exception as e:
+            print(f"General error initializing channel: {e}")
+
 if __name__ == "__main__":
+    init_cache_channel()  # <-- This will ensure channel is initialized on first run
     app.run(host="0.0.0.0", port=WEB_PORT, debug=True)
