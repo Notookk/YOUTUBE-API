@@ -14,7 +14,9 @@ LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
 BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-CACHE_CHANNEL = -1002846625394
+# For public channel: CACHE_CHANNEL = "yourchannelusername" (NO @)
+# For private channel: CACHE_CHANNEL = -1002846625394
+CACHE_CHANNEL = "jejwkanbssbi2919182uhwbsnns"
 WEB_PORT = 8000
 
 logging.basicConfig(
@@ -54,8 +56,8 @@ async def ensure_channel_known():
             print("Initialization message sent to cache channel.")
         except Exception as e:
             print(f"\nFATAL: Could not access cache channel - Peer id invalid.\n"
-                  f"1. Make sure your bot is a member (or admin) in the channel.\n"
-                  f"2. The channel ID is correct and starts with -100.\n"
+                  f"1. If private: Make sure your bot is a member or admin in the channel.\n"
+                  f"2. Channel ID is correct (starts with -100) or username is set correctly (no @).\n"
                   f"3. Restart this script after fixing the above.\n"
                   f"Error was: {e}")
             await pyro_api.stop()
