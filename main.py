@@ -12,7 +12,7 @@ ADMIN_KEY = "XOTIK"
 LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
-BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
+BOT_TOKEN = "7918404318:AAGAusHpc8CZzs2LH254es-WoillmLiVSMs"
 # Use your real public channel username (no @) or private id (int, starts with -100)
 CACHE_CHANNEL = "yourchannelusername"
 WEB_PORT = 8000
