@@ -6,7 +6,6 @@ from flask import Flask, render_template, request, jsonify, send_file, redirect,
 from ytube_api import Ytube
 from mongocache import get_cached_file, save_cached_file
 from pyrogram import Client
-import httpx
 
 API_KEY = "ishq_mein"
 ADMIN_KEY = "XOTIK"
@@ -72,15 +71,14 @@ async def cache_file_send(file_path, video_id, ext):
 
 @app.route("/", methods=["GET"])
 def index():
-    # Always serve the normal user page
+    # Always show the normal user page
     return render_template("index.html")
 
 @app.route("/admin", methods=["GET"])
 def admin_panel():
-    # Only serve if admin key is provided
+    # Only show the admin panel if admin_key is right, else redirect to /
     if check_admin_key():
         return render_template("admin.html")
-    # else, redirect to home or a 403 page
     return redirect(url_for("index"))
 
 @app.route("/search")
@@ -92,12 +90,12 @@ def search():
         return jsonify({"error": "Missing search query"}), 400
     results = yt.search_videos(q)
     if not results.items:
-        return jsonify({"error": "No results found"})
+        return jsonify({"error": "No results found"}), 404
     entry = results.items[0]
     video_id = getattr(entry, 'id', None) or (entry['id'] if isinstance(entry, dict) and 'id' in entry else None)
     title = getattr(entry, 'title', None) or (entry['title'] if isinstance(entry, dict) and 'title' in entry else None)
     if not video_id:
-        return jsonify({"error": "No video id found"})
+        return jsonify({"error": "No video id found"}), 404
     if not title:
         title = video_id
     base = request.url_root.rstrip("/")
