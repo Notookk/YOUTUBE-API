@@ -177,5 +177,20 @@ def download_video():
     loop.run_until_complete(cache_file_send(file_path, video_id, "mp4"))
     return send_file(file_path, as_attachment=True, download_name=f"{video_id}.mp4")
 
+# ----------- JSON Error Handlers for API endpoints -----------
+
+@app.errorhandler(404)
+def not_found(e):
+    # API endpoints should return JSON; others can render HTML
+    if request.path.startswith(("/search", "/download", "/admin")):
+        return jsonify({"error": "Not found"}), 404
+    return render_template("404.html"), 404
+
+@app.errorhandler(500)
+def server_error(e):
+    if request.path.startswith(("/search", "/download", "/admin")):
+        return jsonify({"error": "Server error"}), 500
+    return render_template("500.html"), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=WEB_PORT, debug=True)
