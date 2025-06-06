@@ -7,14 +7,16 @@ from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ytube_api import Ytube
-from mongocache import get_cached_file, save_cached_file
+from mongocache import (
+    get_cached_file, save_cached_file, add_cached_file, revoke_cached_file, list_cached_files,
+    create_api_key, revoke_api_key, get_api_key, list_api_keys, log_api_request, get_today_count, check_api_key as mongo_check_api_key
+)
 from pyrogram import Client, filters
 from pyrogram.types import Message
 import httpx
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-API_KEY = "ishq_mein"
 ADMIN_KEY = "XOTIK"
 LOG_FILE = "api_requests.log"
 API_ID = 25193832
@@ -39,19 +41,6 @@ if os.path.isdir("static"):
 
 pyro_api = Client("api-helper", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 bot_app = Client("music-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# --- In-memory DBs for demo. Replace with MongoDB for production! ---
-api_keys_db = [{
-    "id": "1",
-    "key": API_KEY,
-    "name": "Default",
-    "created_at": datetime.utcnow().isoformat(),
-    "valid_until": (datetime.utcnow() + timedelta(days=9999)).isoformat(),
-    "daily_limit": 10000,
-    "is_admin": True,
-    "count": 0
-}]
-logs_db = []
 
 # --- Helpers ---
 def make_caption(video_id, ext):
@@ -88,27 +77,24 @@ async def cache_file_send(file_path, video_id, ext):
     save_cached_file(video_id, ext, sent.id, file_id)
     return sent
 
+def check_admin_key(request: Request):
+    key = request.query_params.get("admin_key")
+    if key != ADMIN_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid admin key.")
+
 def check_api_key(request: Request):
+    # MongoDB version, supports all key logic, logging, limits, expiry, admin keys, etc.
     if request.url.path in ["/", "/status", "/", "/admin"]:
         return
     key = request.headers.get("x-api-key")
     if not key:
         key = request.query_params.get("api_key")
-    # Log the API request
-    logs_db.append({
-        "timestamp": datetime.utcnow().isoformat(),
-        "api_key": key,
-        "endpoint": request.url.path,
-        "status": 401 if key != API_KEY else 200
-    })
-    if key != API_KEY:
-        logging.warning(f"Unauthorized request from {request.client.host}")
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-
-def check_admin_key(request: Request):
-    key = request.query_params.get("admin_key")
-    if key != ADMIN_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden: Invalid admin key.")
+    try:
+        # raises Exception with message if invalid, expired, or over limit
+        mongo_check_api_key(key, request.url.path)
+    except Exception as e:
+        logging.warning(f"Unauthorized/invalid request from {getattr(request.client, 'host', 'unknown')} : {str(e)}")
+        raise HTTPException(status_code=401 if "limit" not in str(e) else 429, detail=str(e))
 
 @app.on_event("startup")
 async def startup_event():
@@ -139,20 +125,15 @@ async def admin_metrics(request: Request):
     check_admin_key(request)
     now = datetime.utcnow()
     today = now.date()
-    total_requests = len(logs_db)
-    today_requests = sum(1 for l in logs_db if datetime.fromisoformat(l['timestamp']).date() == today)
-    active_keys = sum(1 for k in api_keys_db if datetime.fromisoformat(k['valid_until']) > now)
+    total_requests = log_api_request(None, None, None, op="count_total")
+    today_requests = log_api_request(None, None, None, op="count_today")
+    active_keys = len([k for k in list_api_keys() if datetime.fromisoformat(k['valid_until']) > now])
     error_rate = 0
     if total_requests:
-        error_rate = 100 * sum(1 for l in logs_db if l['status'] >= 400) // total_requests
+        error_rate = 100 * log_api_request(None, None, None, op="count_errors") // total_requests
     # Example daily_requests and key_distribution
-    daily_requests = {}
-    for i in range(7):
-        d = (now - timedelta(days=6-i)).date()
-        daily_requests[d.strftime("%a")] = sum(1 for l in logs_db if datetime.fromisoformat(l['timestamp']).date() == d)
-    key_distribution = {}
-    for k in api_keys_db:
-        key_distribution[k['name']] = sum(1 for l in logs_db if l['api_key'] == k['key'])
+    daily_requests = log_api_request(None, None, None, op="daily_requests")
+    key_distribution = {k['name']: get_today_count(k['key']) for k in list_api_keys()}
     return {
         "total_requests": total_requests,
         "today_requests": today_requests,
@@ -166,39 +147,31 @@ async def admin_metrics(request: Request):
 async def admin_list_api_keys(request: Request):
     check_admin_key(request)
     now = datetime.utcnow()
-    # Provide all API keys, with usage count today
-    for k in api_keys_db:
-        k['count'] = sum(1 for l in logs_db if l['api_key'] == k['key'] and datetime.fromisoformat(l['timestamp']).date() == now.date())
-    return api_keys_db
+    keys = list_api_keys()
+    for k in keys:
+        k['count'] = get_today_count(k['key'])
+    return keys
 
 @app.get("/admin/recent_logs")
 async def admin_recent_logs(request: Request):
     check_admin_key(request)
-    # Return the last 50 logs
-    return logs_db[-50:]
+    return log_api_request(None, None, None, op="recent")
 
 @app.post("/admin/create_api_key")
 async def admin_create_api_key(request: Request, data: dict = Body(...)):
     check_admin_key(request)
-    key = str(uuid4()).replace('-', '')[:32]
-    now = datetime.utcnow()
-    api_key = {
-        "id": str(uuid4()),
-        "key": key,
-        "name": data.get("name", "unnamed"),
-        "created_at": now.isoformat(),
-        "valid_until": (now + timedelta(days=data.get("days_valid", 30))).isoformat(),
-        "daily_limit": data.get("daily_limit", 100),
-        "is_admin": data.get("is_admin", False),
-        "count": 0
-    }
-    api_keys_db.append(api_key)
-    return {"api_key": key}
+    key_doc = create_api_key(
+        name=data.get("name", "unnamed"),
+        days_valid=data.get("days_valid", 30),
+        daily_limit=data.get("daily_limit", 100),
+        is_admin=data.get("is_admin", False)
+    )
+    return {"api_key": key_doc["key"]}
 
 @app.post("/admin/revoke_api_key")
 async def admin_revoke_api_key(request: Request, data: dict = Body(...)):
     check_admin_key(request)
-    api_keys_db[:] = [k for k in api_keys_db if k["id"] != data["id"]]
+    revoke_api_key(data["id"])
     return {"status": "ok"}
 
 # --- API CORE ENDPOINTS ---
@@ -217,8 +190,8 @@ async def search(request: Request, q: str = Query(...)):
     if not title:
         title = video_id
     base = str(request.base_url).rstrip("/")
-    audio_stream = f"{base}/download/audio?video_id={video_id}&api_key={API_KEY}"
-    video_stream = f"{base}/download/video?video_id={video_id}&api_key={API_KEY}"
+    audio_stream = f"{base}/download/audio?video_id={video_id}&api_key="
+    video_stream = f"{base}/download/video?video_id={video_id}&api_key="
     return {
         "id": video_id,
         "title": title,
@@ -342,7 +315,7 @@ async def song_handler(client: Client, message: Message):
     title = video_id
     try:
         async with httpx.AsyncClient(timeout=10) as client2:
-            r = await client2.get(f"http://127.0.0.1:{WEB_PORT}/search", params={"q": video_id, "api_key": API_KEY})
+            r = await client2.get(f"http://127.0.0.1:{WEB_PORT}/search", params={"q": video_id, "api_key": ""})
             if r.status_code == 200 and "title" in r.json():
                 title = r.json()["title"]
     except Exception as e:
@@ -358,7 +331,7 @@ async def song_handler(client: Client, message: Message):
         try:
             r = await client3.get(
                 f"http://127.0.0.1:{WEB_PORT}/download/audio",
-                params={"video_id": video_id, "api_key": API_KEY}
+                params={"video_id": video_id, "api_key": ""}
             )
             if r.status_code == 200:
                 os.makedirs("downloads", exist_ok=True)
