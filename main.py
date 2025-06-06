@@ -46,13 +46,15 @@ async def ensure_pyrogram_running():
 async def ensure_channel_known(client, channel_id):
     try:
         await client.get_chat(channel_id)
-    except Exception:
+    except errors.PeerIdInvalid:
         try:
             await client.send_message(channel_id, "Initializing channel for bot cache (safe to delete)")
             print(f"Initialization message sent to channel {channel_id}.")
         except Exception as e:
             print(f"Failed to initialize channel {channel_id}: {e}")
             raise
+    except Exception as e:
+        print(f"General error initializing channel: {e}")
 
 async def search_cache(video_id, ext):
     return get_cached_file(video_id, ext)
@@ -192,7 +194,7 @@ def server_error(e):
 # -------- Channel Initialization Logic --------
 def init_cache_channel():
     print("Initializing cache channel (if not already initialized)...")
-    with Client("init-once", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN) as app:
+    with Client("api-helper", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN) as app:
         try:
             app.get_chat(CACHE_CHANNEL)
             print("Bot already knows the channel.")
@@ -206,5 +208,6 @@ def init_cache_channel():
             print(f"General error initializing channel: {e}")
 
 if __name__ == "__main__":
-    init_cache_channel()  # <-- This will ensure channel is initialized on first run
+    init_cache_channel()  # Use the same session as your app!
+    pyro_api.start()      # Start the same session for use with async later
     app.run(host="0.0.0.0", port=WEB_PORT, debug=True)
