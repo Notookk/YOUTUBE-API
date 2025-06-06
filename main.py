@@ -1,7 +1,6 @@
 import os
 import logging
 import requests
-import asyncio
 import sys
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from ytube_api import Ytube
@@ -14,9 +13,8 @@ LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
 BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-# For public channel: CACHE_CHANNEL = "yourchannelusername" (no @)
-# For private channel: CACHE_CHANNEL = -1002846625394
-CACHE_CHANNEL = "jejwkanbssbi2919182uhwbsnns"
+# Use your real public channel username (no @) or private id (int, starts with -100)
+CACHE_CHANNEL = "yourchannelusername"
 WEB_PORT = 8000
 
 logging.basicConfig(
@@ -41,43 +39,30 @@ def check_admin_key():
     key = request.args.get("admin_key")
     return key == ADMIN_KEY
 
-async def ensure_pyrogram_running():
-    if not pyro_api.is_connected:
-        await pyro_api.start()
-        await asyncio.sleep(1)
-
-async def ensure_channel_known():
+def ensure_channel_known():
     try:
-        await pyro_api.get_chat(CACHE_CHANNEL)
+        pyro_api.get_chat(CACHE_CHANNEL)
         print("Bot already knows the cache channel.")
-    except errors.PeerIdInvalid:
-        try:
-            await pyro_api.send_message(CACHE_CHANNEL, "Initializing cache channel for bot (safe to delete this).")
-            print("Initialization message sent to cache channel.")
-        except Exception as e:
-            print(f"\nFATAL: Could not access cache channel - Peer id invalid.\n"
-                  f"1. If private: Make sure your bot is a member or admin in the channel.\n"
-                  f"2. Channel ID is correct (starts with -100) or username is set correctly (no @).\n"
-                  f"3. Restart this script after fixing the above.\n"
-                  f"Error was: {e}")
-            await pyro_api.stop()
-            sys.exit(1)
     except Exception as e:
-        print(f"FATAL: Could not access cache channel - {e}")
-        await pyro_api.stop()
+        print(f"\nFATAL: Could not access cache channel: {e}\n"
+              "1. Make sure your bot is a member (or admin) in the channel.\n"
+              "2. The channel username is correct (no @) or the numeric id is correct (starts with -100).\n"
+              "3. The channel is public if you use a username.\n"
+              "4. Restart this script after fixing the above.")
+        pyro_api.stop()
         sys.exit(1)
 
-async def search_cache(video_id, ext):
+def search_cache(video_id, ext):
     return get_cached_file(video_id, ext)
 
-async def cache_file_send(file_path, video_id, ext):
-    await ensure_pyrogram_running()
+def cache_file_send(file_path, video_id, ext):
     caption = make_caption(video_id, ext)
     if ext == "mp3":
-        sent = await pyro_api.send_audio(CACHE_CHANNEL, file_path, caption=caption)
+        sent = pyro_api.send_audio(CACHE_CHANNEL, file_path, caption=caption)
+        file_id = sent.audio.file_id
     else:
-        sent = await pyro_api.send_video(CACHE_CHANNEL, file_path, caption=caption)
-    file_id = sent.audio.file_id if ext == "mp3" else sent.video.file_id
+        sent = pyro_api.send_video(CACHE_CHANNEL, file_path, caption=caption)
+        file_id = sent.video.file_id
     save_cached_file(video_id, ext, sent.id, file_id)
     return sent
 
@@ -132,10 +117,10 @@ def download_audio():
     item = results.items[0]
     title = getattr(item, "title", None) or (item["title"] if isinstance(item, dict) and "title" in item else None)
     if not title: title = video_id
-    cached = asyncio.run(search_cache(video_id, "mp3"))
+    cached = search_cache(video_id, "mp3")
     if cached and "message_id" in cached:
-        file = asyncio.run(pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"]))
-        file_url = asyncio.run(pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp3"))
+        file = pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
+        file_url = pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp3")
         return send_file(file_url, as_attachment=True, download_name=f"{video_id}.mp3")
     download_link = yt.get_download_link(item, format="mp3", quality="320")
     if not download_link or not getattr(download_link, 'url', None):
@@ -148,7 +133,7 @@ def download_audio():
     with open(file_path, "wb") as f:
         for chunk in resp.iter_content(4096):
             f.write(chunk)
-    asyncio.run(cache_file_send(file_path, video_id, "mp3"))
+    cache_file_send(file_path, video_id, "mp3")
     return send_file(file_path, as_attachment=True, download_name=f"{video_id}.mp3")
 
 @app.route("/download/video")
@@ -164,10 +149,10 @@ def download_video():
     item = results.items[0]
     title = getattr(item, "title", None) or (item["title"] if isinstance(item, dict) and "title" in item else None)
     if not title: title = video_id
-    cached = asyncio.run(search_cache(video_id, "mp4"))
+    cached = search_cache(video_id, "mp4")
     if cached and "message_id" in cached:
-        file = asyncio.run(pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"]))
-        file_url = asyncio.run(pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp4"))
+        file = pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
+        file_url = pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp4")
         return send_file(file_url, as_attachment=True, download_name=f"{video_id}.mp4")
     download_link = yt.get_download_link(item, format="mp4", quality="360")
     if not download_link or not getattr(download_link, 'url', None):
@@ -180,7 +165,7 @@ def download_video():
     with open(file_path, "wb") as f:
         for chunk in resp.iter_content(4096):
             f.write(chunk)
-    asyncio.run(cache_file_send(file_path, video_id, "mp4"))
+    cache_file_send(file_path, video_id, "mp4")
     return send_file(file_path, as_attachment=True, download_name=f"{video_id}.mp4")
 
 @app.errorhandler(404)
@@ -197,7 +182,7 @@ def server_error(e):
 
 if __name__ == "__main__":
     pyro_api.start()
-    asyncio.run(ensure_channel_known())
+    ensure_channel_known()
     print("Pyrogram session and cache channel ready. Starting Flask app!")
     app.run(host="0.0.0.0", port=WEB_PORT, debug=True)
     pyro_api.stop()
