@@ -13,7 +13,7 @@ LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
 BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-CACHE_CHANNEL = "yourchannelusername"  # Set to your public channel username (no @), or -100... for private
+CACHE_CHANNEL = "jejwkanbssbi2919182uhwbsnns"  # Set to your public channel username (no @), or -100... for private
 WEB_PORT = 8000
 
 logging.basicConfig(
