@@ -2,6 +2,7 @@ import os
 import logging
 import requests
 import asyncio
+import sys
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from ytube_api import Ytube
 from mongocache import get_cached_file, save_cached_file
@@ -43,25 +44,30 @@ async def ensure_pyrogram_running():
         await pyro_api.start()
         await asyncio.sleep(2)
 
-async def ensure_channel_known(client, channel_id):
+async def ensure_channel_ready():
+    """Ensure the bot knows the channel, or try to send a message if not."""
     try:
-        await client.get_chat(channel_id)
+        await pyro_api.get_chat(CACHE_CHANNEL)
+        print("Bot already knows the cache channel.")
     except errors.PeerIdInvalid:
         try:
-            await client.send_message(channel_id, "Initializing channel for bot cache (safe to delete)")
-            print(f"Initialization message sent to channel {channel_id}.")
+            await pyro_api.send_message(CACHE_CHANNEL, "Initializing cache channel for bot (safe to delete this).")
+            print("Initialization message sent to cache channel.")
         except Exception as e:
-            print(f"Failed to initialize channel {channel_id}: {e}")
-            raise
+            print(f"FATAL: Could not initialize channel - {e}")
+            print("Make sure the bot is a member/admin in the channel.")
+            await pyro_api.stop()
+            sys.exit(1)
     except Exception as e:
-        print(f"General error initializing channel: {e}")
+        print(f"FATAL: Could not access cache channel - {e}")
+        await pyro_api.stop()
+        sys.exit(1)
 
 async def search_cache(video_id, ext):
     return get_cached_file(video_id, ext)
 
 async def cache_file_send(file_path, video_id, ext):
     await ensure_pyrogram_running()
-    await ensure_channel_known(pyro_api, CACHE_CHANNEL)
     caption = make_caption(video_id, ext)
     if ext == "mp3":
         sent = await pyro_api.send_audio(CACHE_CHANNEL, file_path, caption=caption)
@@ -191,23 +197,11 @@ def server_error(e):
         return jsonify({"error": "Server error"}), 500
     return render_template("500.html"), 500
 
-# -------- Channel Initialization Logic --------
-def init_cache_channel():
-    print("Initializing cache channel (if not already initialized)...")
-    with Client("api-helper", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN) as app:
-        try:
-            app.get_chat(CACHE_CHANNEL)
-            print("Bot already knows the channel.")
-        except errors.PeerIdInvalid:
-            try:
-                app.send_message(CACHE_CHANNEL, "Hello from bot! (channel is now initialized for Pyrogram)")
-                print("Initialization message sent to channel.")
-            except Exception as e:
-                print(f"Failed to initialize channel {CACHE_CHANNEL}: {e}")
-        except Exception as e:
-            print(f"General error initializing channel: {e}")
-
 if __name__ == "__main__":
-    init_cache_channel()  # Use the same session as your app!
-    pyro_api.start()      # Start the same session for use with async later
+    # Startup: start Pyrogram and ensure channel is ready before Flask starts
+    pyro_api.start()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(ensure_channel_ready())
+    print("Pyrogram session and cache channel ready. Starting Flask app!")
     app.run(host="0.0.0.0", port=WEB_PORT, debug=True)
+    pyro_api.stop()
