@@ -2,13 +2,14 @@ import os
 import logging
 import requests
 import asyncio
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from ytube_api import Ytube
 from mongocache import get_cached_file, save_cached_file
 from pyrogram import Client
 import httpx
 
 API_KEY = "ishq_mein"
+ADMIN_KEY = "XOTIK"
 LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
@@ -32,10 +33,11 @@ def make_caption(video_id, ext):
 
 def check_api_key():
     key = request.headers.get("x-api-key") or request.args.get("api_key")
-    if key != API_KEY:
-        logging.warning(f"Unauthorized request from {request.remote_addr}")
-        return False
-    return True
+    return key == API_KEY
+
+def check_admin_key():
+    key = request.args.get("admin_key")
+    return key == ADMIN_KEY
 
 async def ensure_pyrogram_running():
     if not pyro_api.is_connected:
@@ -70,13 +72,24 @@ async def cache_file_send(file_path, video_id, ext):
 
 @app.route("/", methods=["GET"])
 def index():
+    # Always serve the normal user page
     return render_template("index.html")
+
+@app.route("/admin", methods=["GET"])
+def admin_panel():
+    # Only serve if admin key is provided
+    if check_admin_key():
+        return render_template("admin.html")
+    # else, redirect to home or a 403 page
+    return redirect(url_for("index"))
 
 @app.route("/search")
 def search():
     if not check_api_key():
         return jsonify({"error": "Invalid API Key"}), 401
     q = request.args.get("q")
+    if not q:
+        return jsonify({"error": "Missing search query"}), 400
     results = yt.search_videos(q)
     if not results.items:
         return jsonify({"error": "No results found"})
@@ -103,6 +116,8 @@ def download_audio():
     if not check_api_key():
         return jsonify({"error": "Invalid API Key"}), 401
     video_id = request.args.get("video_id")
+    if not video_id:
+        return jsonify({"error": "Missing video_id"}), 400
     results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
     if not results.items:
         return jsonify({"error": "No audio link found"}), 404
@@ -135,6 +150,8 @@ def download_video():
     if not check_api_key():
         return jsonify({"error": "Invalid API Key"}), 401
     video_id = request.args.get("video_id")
+    if not video_id:
+        return jsonify({"error": "Missing video_id"}), 400
     results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
     if not results.items:
         return jsonify({"error": "No video link found"}), 404
