@@ -2,7 +2,7 @@ import os
 import logging
 import requests
 import asyncio
-from fastapi import FastAPI, Query, Request, HTTPException, Depends
+from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -19,7 +19,7 @@ LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
 BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-CACHE_CHANNEL = -1002846625394  # <-- Set your private channel ID here
+CACHE_CHANNEL = -1002846625394  # Set your private channel ID here
 WEB_PORT = 8000
 
 logging.basicConfig(
@@ -33,7 +33,6 @@ app = FastAPI()
 yt = Ytube()
 templates = Jinja2Templates(directory="templates")
 
-# For serving /static files
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -59,8 +58,7 @@ async def ensure_channel_known(client, channel_id):
             raise
 
 async def search_cache(video_id, ext):
-    entry = get_cached_file(video_id, ext)
-    return entry
+    return get_cached_file(video_id, ext)
 
 async def cache_file_send(file_path, video_id, ext):
     await ensure_pyrogram_running()
@@ -150,6 +148,8 @@ async def download_audio(request: Request, video_id: str = Query(...)):
     cached = await search_cache(video_id, "mp3")
     if cached and "message_id" in cached:
         file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
+        if not file or not getattr(file, "audio", None):
+            raise HTTPException(status_code=410, detail="Cached audio not found. Please try again.")
         file_url = await pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp3")
         headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp3"'}
         def iterfile():
@@ -189,6 +189,8 @@ async def download_video(request: Request, video_id: str = Query(...)):
     cached = await search_cache(video_id, "mp4")
     if cached and "message_id" in cached:
         file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
+        if not file or not getattr(file, "video", None):
+            raise HTTPException(status_code=410, detail="Cached video not found. Please try again.")
         file_url = await pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp4")
         headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp4"'}
         def iterfile():
@@ -215,7 +217,72 @@ async def download_video(request: Request, video_id: str = Query(...)):
                 yield chunk
     return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
 
-# ... (rest of your bot_app code remains unchanged)
+# Telegram Bot Section (unchanged but required for full function)
+async def search_cache_bot(video_id, ext):
+    return get_cached_file(video_id, ext)
+
+@bot_app.on_message(filters.command("start") & filters.private)
+async def start_handler(client: Client, message: Message):
+    await message.reply(
+        "👋 **Welcome!**\n\n"
+        "Send /song <YouTube URL or ID> to get any song/audio.\n"
+        "The bot caches each downloaded file in a channel for blazing fast future access!\n\n"
+        "Example:\n/song https://youtu.be/dQw4w9WgXcQ"
+    )
+
+@bot_app.on_message(filters.command("song") & filters.private)
+async def song_handler(client: Client, message: Message):
+    if len(message.command) < 2:
+        await message.reply("Usage: /song YOUTUBE_VIDEO_ID_or_URL")
+        return
+    query = message.command[1]
+    if "youtube.com" in query or "youtu.be" in query:
+        if "v=" in query:
+            video_id = query.split("v=")[-1].split("&")[0]
+        elif "youtu.be/" in query:
+            video_id = query.split("youtu.be/")[-1].split("?")[0]
+        else:
+            await message.reply("Could not extract video ID.")
+            return
+    else:
+        video_id = query
+
+    title = video_id
+    try:
+        async with httpx.AsyncClient(timeout=10) as client2:
+            r = await client2.get(f"http://127.0.0.1:{WEB_PORT}/search", params={"q": video_id, "api_key": API_KEY})
+            if r.status_code == 200 and "title" in r.json():
+                title = r.json()["title"]
+    except Exception as e:
+        print(f"[bot /song] search error: {e}")
+
+    cached_msg = await search_cache_bot(video_id, "mp3")
+    if cached_msg and "file_id" in cached_msg:
+        await message.reply_audio(cached_msg["file_id"], caption=f"🎵 {title}\n(From cache)")
+        return
+
+    await message.reply("Downloading, please wait...")
+    async with httpx.AsyncClient(timeout=180) as client3:
+        try:
+            r = await client3.get(
+                f"http://127.0.0.1:{WEB_PORT}/download/audio",
+                params={"video_id": video_id, "api_key": API_KEY}
+            )
+            if r.status_code == 200:
+                os.makedirs("downloads", exist_ok=True)
+                file_path = f"downloads/{video_id}_bot.mp3"
+                with open(file_path, "wb") as f:
+                    f.write(r.content)
+                sent = await client.send_audio(CACHE_CHANNEL, file_path, caption=make_caption(video_id, "mp3"))
+                save_cached_file(video_id, "mp3", sent.id, sent.audio.file_id)
+                await message.reply_audio(sent.audio.file_id, caption=f"🎵 {title}\n(Downloaded and cached)")
+                os.remove(file_path)
+                return
+            else:
+                await message.reply("API download failed.")
+        except Exception as e:
+            await message.reply("Failed to download and send audio.")
+            print(f"[bot /song] download error: {e}")
 
 async def run_bot():
     await bot_app.start()
