@@ -1,15 +1,21 @@
-email-validator
-flask-cors
-flask
-flask-sqlalchemy
-gunicorn
-httpx
-psycopg2-binary
-youtube-search-python
-yt-dlp
-flask-limiter
-trafilatura
+# FastAPI stack
+fastapi
+uvicorn
+pyrogram
+tgcrypto
 pymongo
+motor
+requests
+httpx
+yt-dlp
+playwright
+
+# Flask stack (if you need it)
+flask
+flask-cors
+flask-sqlalchemy
+flask-limiter
 flask-login
 flask-wtf
-playwright
+gunicorn
+psycopg2-binary
