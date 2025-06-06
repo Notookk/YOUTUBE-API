@@ -575,7 +575,7 @@
                 testApiBtn.disabled = true;
                 testApiBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Loading...';
                 
-                const apiUrl = `/youtube?query=${encodeURIComponent(url)}&video=${isVideo}&api_key=xotik`;
+                const apiUrl = `/search?q=${encodeURIComponent(url)}&video=${isVideo}&api_key=ishq_mein`;
                 
                 // Make API request
                 fetch(apiUrl)
