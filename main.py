@@ -13,7 +13,7 @@ LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
 BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-CACHE_CHANNEL = -1002846625394
+CACHE_CHANNEL = -1002846625394  # PRIVATE channel, use integer, not string
 WEB_PORT = 8000
 
 logging.basicConfig(
@@ -71,12 +71,10 @@ async def cache_file_send(file_path, video_id, ext):
 
 @app.route("/", methods=["GET"])
 def index():
-    # Always show the normal user page
     return render_template("index.html")
 
 @app.route("/admin", methods=["GET"])
 def admin_panel():
-    # Only show the admin panel if admin_key is right, else redirect to /
     if check_admin_key():
         return render_template("admin.html")
     return redirect(url_for("index"))
@@ -178,10 +176,8 @@ def download_video():
     return send_file(file_path, as_attachment=True, download_name=f"{video_id}.mp4")
 
 # ----------- JSON Error Handlers for API endpoints -----------
-
 @app.errorhandler(404)
 def not_found(e):
-    # API endpoints should return JSON; others can render HTML
     if request.path.startswith(("/search", "/download", "/admin")):
         return jsonify({"error": "Not found"}), 404
     return render_template("404.html"), 404
