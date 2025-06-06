@@ -2,16 +2,17 @@ import os
 import logging
 import requests
 import asyncio
-from fastapi import FastAPI, Query, Request, HTTPException
+from fastapi import FastAPI, Query, Request, HTTPException, Body
 from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-
 from ytube_api import Ytube
 from mongocache import get_cached_file, save_cached_file
 from pyrogram import Client, filters
 from pyrogram.types import Message
 import httpx
+from datetime import datetime, timedelta
+from uuid import uuid4
 
 API_KEY = "ishq_mein"
 ADMIN_KEY = "XOTIK"
@@ -19,7 +20,7 @@ LOG_FILE = "api_requests.log"
 API_ID = 25193832
 API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
 BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-CACHE_CHANNEL = -1002846625394  # Set your private channel ID here
+CACHE_CHANNEL = -1002846625394
 WEB_PORT = 8000
 
 logging.basicConfig(
@@ -39,6 +40,20 @@ if os.path.isdir("static"):
 pyro_api = Client("api-helper", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 bot_app = Client("music-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+# --- In-memory DBs for demo. Replace with MongoDB for production! ---
+api_keys_db = [{
+    "id": "1",
+    "key": API_KEY,
+    "name": "Default",
+    "created_at": datetime.utcnow().isoformat(),
+    "valid_until": (datetime.utcnow() + timedelta(days=9999)).isoformat(),
+    "daily_limit": 10000,
+    "is_admin": True,
+    "count": 0
+}]
+logs_db = []
+
+# --- Helpers ---
 def make_caption(video_id, ext):
     return f"yt_{video_id}_{ext}"
 
@@ -79,6 +94,13 @@ def check_api_key(request: Request):
     key = request.headers.get("x-api-key")
     if not key:
         key = request.query_params.get("api_key")
+    # Log the API request
+    logs_db.append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "api_key": key,
+        "endpoint": request.url.path,
+        "status": 401 if key != API_KEY else 200
+    })
     if key != API_KEY:
         logging.warning(f"Unauthorized request from {request.client.host}")
         raise HTTPException(status_code=401, detail="Invalid API Key")
@@ -110,6 +132,76 @@ async def admin_panel(request: Request):
         return templates.TemplateResponse("admin.html", {"request": request})
     except HTTPException:
         return RedirectResponse(url="/")
+
+# --- ADMIN ENDPOINTS FOR DASHBOARD ---
+@app.get("/admin/metrics")
+async def admin_metrics(request: Request):
+    check_admin_key(request)
+    now = datetime.utcnow()
+    today = now.date()
+    total_requests = len(logs_db)
+    today_requests = sum(1 for l in logs_db if datetime.fromisoformat(l['timestamp']).date() == today)
+    active_keys = sum(1 for k in api_keys_db if datetime.fromisoformat(k['valid_until']) > now)
+    error_rate = 0
+    if total_requests:
+        error_rate = 100 * sum(1 for l in logs_db if l['status'] >= 400) // total_requests
+    # Example daily_requests and key_distribution
+    daily_requests = {}
+    for i in range(7):
+        d = (now - timedelta(days=6-i)).date()
+        daily_requests[d.strftime("%a")] = sum(1 for l in logs_db if datetime.fromisoformat(l['timestamp']).date() == d)
+    key_distribution = {}
+    for k in api_keys_db:
+        key_distribution[k['name']] = sum(1 for l in logs_db if l['api_key'] == k['key'])
+    return {
+        "total_requests": total_requests,
+        "today_requests": today_requests,
+        "active_keys": active_keys,
+        "error_rate": error_rate,
+        "daily_requests": daily_requests,
+        "key_distribution": key_distribution,
+    }
+
+@app.get("/admin/list_api_keys")
+async def admin_list_api_keys(request: Request):
+    check_admin_key(request)
+    now = datetime.utcnow()
+    # Provide all API keys, with usage count today
+    for k in api_keys_db:
+        k['count'] = sum(1 for l in logs_db if l['api_key'] == k['key'] and datetime.fromisoformat(l['timestamp']).date() == now.date())
+    return api_keys_db
+
+@app.get("/admin/recent_logs")
+async def admin_recent_logs(request: Request):
+    check_admin_key(request)
+    # Return the last 50 logs
+    return logs_db[-50:]
+
+@app.post("/admin/create_api_key")
+async def admin_create_api_key(request: Request, data: dict = Body(...)):
+    check_admin_key(request)
+    key = str(uuid4()).replace('-', '')[:32]
+    now = datetime.utcnow()
+    api_key = {
+        "id": str(uuid4()),
+        "key": key,
+        "name": data.get("name", "unnamed"),
+        "created_at": now.isoformat(),
+        "valid_until": (now + timedelta(days=data.get("days_valid", 30))).isoformat(),
+        "daily_limit": data.get("daily_limit", 100),
+        "is_admin": data.get("is_admin", False),
+        "count": 0
+    }
+    api_keys_db.append(api_key)
+    return {"api_key": key}
+
+@app.post("/admin/revoke_api_key")
+async def admin_revoke_api_key(request: Request, data: dict = Body(...)):
+    check_admin_key(request)
+    api_keys_db[:] = [k for k in api_keys_db if k["id"] != data["id"]]
+    return {"status": "ok"}
+
+# --- API CORE ENDPOINTS ---
 
 @app.get("/search")
 async def search(request: Request, q: str = Query(...)):
