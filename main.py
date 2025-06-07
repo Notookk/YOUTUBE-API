@@ -18,13 +18,13 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 from bson import ObjectId
 
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "XOTIK")
+ADMIN_KEY = "XOTIK"
 LOG_FILE = "api_requests.log"
-API_ID = int(os.environ.get("API_ID", 25193832))
-API_HASH = os.environ.get("API_HASH", "e154b1ccb0195edec0bc91ae7efebc2f")
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0")
-CACHE_CHANNEL = int(os.environ.get("CACHE_CHANNEL", -1002846625394))
-WEB_PORT = int(os.environ.get("WEB_PORT", 8000))
+API_ID = 25193832
+API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
+BOT_TOKEN = "7918404318:AAHVmbJFGfGybUIFExKuOnOLgt91wgPgLmY"
+CACHE_CHANNEL = -1002846625394
+WEB_PORT = 8000
 
 logging.basicConfig(
     filename=LOG_FILE,
