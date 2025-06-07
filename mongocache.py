@@ -20,19 +20,35 @@ log_collection = client[MONGO_DB][MONGO_LOG_COLL]
 async def get_cached_file(video_id, ext):
     return await collection.find_one({"video_id": video_id, "ext": ext})
 
-async def save_cached_file(video_id, ext, message_id, file_id):
+async def save_cached_file(video_id, ext, message_id=None, file_id=None, status="ready"):
     await collection.update_one(
         {"video_id": video_id, "ext": ext},
-        {"$set": {"message_id": message_id, "file_id": file_id}},
+        {"$set": {"message_id": message_id, "file_id": file_id, "status": status}},
         upsert=True
     )
+
+async def set_pending_file(video_id, ext):
+    # Try to atomically set a file as pending if it doesn't already exist
+    existing = await collection.find_one({"video_id": video_id, "ext": ext})
+    if existing:
+        if existing.get("status") == "pending":
+            return False  # Already being processed
+        if existing.get("status") == "ready":
+            return False  # Already uploaded
+    await collection.update_one(
+        {"video_id": video_id, "ext": ext},
+        {"$set": {"status": "pending", "message_id": None, "file_id": None}},
+        upsert=True
+    )
+    return True
 
 async def add_cached_file(video_id, ext, message_id, file_id):
     doc = {
         "video_id": video_id,
         "ext": ext,
         "message_id": message_id,
-        "file_id": file_id
+        "file_id": file_id,
+        "status": "ready"
     }
     try:
         await collection.insert_one(doc)
