@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ytube_api import Ytube
 from mongocache import (
     get_cached_file, save_cached_file, add_cached_file, revoke_cached_file, list_cached_files,
-    create_api_key, revoke_api_key, get_api_key, list_api_keys, log_api_request, get_today_count, check_api_key as mongo_check_api_key
+    create_api_key, revoke_api_key, get_api_key, list_api_keys, log_api_request, get_today_count, check_api_key as mongo_check_api_key, set_pending_file
 )
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -84,7 +84,7 @@ async def cache_file_send(file_path, video_id, ext):
     else:
         sent = await pyro_api.send_video(CACHE_CHANNEL, file_path, caption=caption)
         file_id = sent.video.file_id
-    await save_cached_file(video_id, ext, sent.id, file_id)
+    await save_cached_file(video_id, ext, sent.id, file_id, status="ready")
     return sent
 
 def check_admin_key(request: Request):
@@ -217,31 +217,64 @@ async def search(request: Request, q: str = Query(...)):
 @app.get("/download/audio")
 async def download_audio(request: Request, video_id: str = Query(...), background_tasks: BackgroundTasks = None):
     await check_api_key(request)
+    cached = await search_cache(video_id, "mp3")
+    if cached:
+        if cached.get("status") == "pending":
+            # Wait up to 20s for the cache to be ready
+            for _ in range(20):
+                await asyncio.sleep(1)
+                cached = await search_cache(video_id, "mp3")
+                if cached and cached.get("status") == "ready" and "message_id" in cached:
+                    break
+            else:
+                raise HTTPException(status_code=423, detail="File is being processed. Try again soon.")
+        if cached.get("status") == "ready" and "message_id" in cached:
+            file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
+            if not file or not getattr(file, "audio", None):
+                raise HTTPException(status_code=410, detail="Cached audio not found. Please try again.")
+            file_url = await pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp3")
+            headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp3"'}
+            def iterfile():
+                with open(file_url, "rb") as f:
+                    while chunk := f.read(4096):
+                        yield chunk
+            return StreamingResponse(iterfile(), media_type="audio/mpeg", headers=headers)
+    # Try to set pending status atomically
+    set_pending = await set_pending_file(video_id, "mp3")
+    if not set_pending:
+        # Wait for the other process to finish
+        for _ in range(20):
+            await asyncio.sleep(1)
+            cached = await search_cache(video_id, "mp3")
+            if cached and cached.get("status") == "ready" and "message_id" in cached:
+                file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
+                if not file or not getattr(file, "audio", None):
+                    raise HTTPException(status_code=410, detail="Cached audio not found. Please try again.")
+                file_url = await pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp3")
+                headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp3"'}
+                def iterfile():
+                    with open(file_url, "rb") as f:
+                        while chunk := f.read(4096):
+                            yield chunk
+                return StreamingResponse(iterfile(), media_type="audio/mpeg", headers=headers)
+        raise HTTPException(status_code=423, detail="File is being processed. Try again soon.")
+    # Proceed with download
     results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
     if not results.items:
+        await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
         raise HTTPException(status_code=404, detail="No audio link found")
     item = results.items[0]
     title = getattr(item, "title", None) or (item["title"] if isinstance(item, dict) and "title" in item else None)
     if not title:
         title = video_id
-    cached = await search_cache(video_id, "mp3")
-    if cached and "message_id" in cached:
-        file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
-        if not file or not getattr(file, "audio", None):
-            raise HTTPException(status_code=410, detail="Cached audio not found. Please try again.")
-        file_url = await pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp3")
-        headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp3"'}
-        def iterfile():
-            with open(file_url, "rb") as f:
-                while chunk := f.read(4096):
-                    yield chunk
-        return StreamingResponse(iterfile(), media_type="audio/mpeg", headers=headers)
     download_link = yt.get_download_link(item, format="mp3", quality="320")
     if not download_link or not getattr(download_link, 'url', None):
+        await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
         raise HTTPException(status_code=404, detail="No audio link found")
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.get(download_link.url)
         if resp.status_code != 200:
+            await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
             raise HTTPException(status_code=500, detail="Failed to fetch audio stream")
         os.makedirs("downloads", exist_ok=True)
         file_path = f"downloads/{video_id}_new.mp3"
@@ -261,31 +294,64 @@ async def download_audio(request: Request, video_id: str = Query(...), backgroun
 @app.get("/download/video")
 async def download_video(request: Request, video_id: str = Query(...), background_tasks: BackgroundTasks = None):
     await check_api_key(request)
+    cached = await search_cache(video_id, "mp4")
+    if cached:
+        if cached.get("status") == "pending":
+            # Wait up to 20s for the cache to be ready
+            for _ in range(20):
+                await asyncio.sleep(1)
+                cached = await search_cache(video_id, "mp4")
+                if cached and cached.get("status") == "ready" and "message_id" in cached:
+                    break
+            else:
+                raise HTTPException(status_code=423, detail="File is being processed. Try again soon.")
+        if cached.get("status") == "ready" and "message_id" in cached:
+            file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
+            if not file or not getattr(file, "video", None):
+                raise HTTPException(status_code=410, detail="Cached video not found. Please try again.")
+            file_url = await pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp4")
+            headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp4"'}
+            def iterfile():
+                with open(file_url, "rb") as f:
+                    while chunk := f.read(4096):
+                        yield chunk
+            return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
+    # Try to set pending status atomically
+    set_pending = await set_pending_file(video_id, "mp4")
+    if not set_pending:
+        # Wait for the other process to finish
+        for _ in range(20):
+            await asyncio.sleep(1)
+            cached = await search_cache(video_id, "mp4")
+            if cached and cached.get("status") == "ready" and "message_id" in cached:
+                file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
+                if not file or not getattr(file, "video", None):
+                    raise HTTPException(status_code=410, detail="Cached video not found. Please try again.")
+                file_url = await pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp4")
+                headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp4"'}
+                def iterfile():
+                    with open(file_url, "rb") as f:
+                        while chunk := f.read(4096):
+                            yield chunk
+                return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
+        raise HTTPException(status_code=423, detail="File is being processed. Try again soon.")
+    # Proceed with download
     results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
     if not results.items:
+        await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
         raise HTTPException(status_code=404, detail="No video link found")
     item = results.items[0]
     title = getattr(item, "title", None) or (item["title"] if isinstance(item, dict) and "title" in item else None)
     if not title:
         title = video_id
-    cached = await search_cache(video_id, "mp4")
-    if cached and "message_id" in cached:
-        file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
-        if not file or not getattr(file, "video", None):
-            raise HTTPException(status_code=410, detail="Cached video not found. Please try again.")
-        file_url = await pyro_api.download_media(file, file_name=f"downloads/{video_id}_cache.mp4")
-        headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp4"'}
-        def iterfile():
-            with open(file_url, "rb") as f:
-                while chunk := f.read(4096):
-                    yield chunk
-        return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
     download_link = yt.get_download_link(item, format="mp4", quality="360")
     if not download_link or not getattr(download_link, 'url', None):
+        await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
         raise HTTPException(status_code=404, detail="No video link found")
     async with httpx.AsyncClient(timeout=180) as client:
         resp = await client.get(download_link.url)
         if resp.status_code != 200:
+            await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
             raise HTTPException(status_code=500, detail="Failed to fetch video stream")
         os.makedirs("downloads", exist_ok=True)
         file_path = f"downloads/{video_id}_new.mp4"
@@ -359,7 +425,7 @@ async def song_handler(client: Client, message: Message):
                 with open(file_path, "wb") as f:
                     f.write(r.content)
                 sent = await client.send_audio(CACHE_CHANNEL, file_path, caption=make_caption(video_id, "mp3"))
-                await save_cached_file(video_id, "mp3", sent.id, sent.audio.file_id)
+                await save_cached_file(video_id, "mp3", sent.id, sent.audio.file_id, status="ready")
                 await message.reply_audio(sent.audio.file_id, caption=f"🎵 {title}\n(Downloaded and cached)")
                 os.remove(file_path)
                 return
