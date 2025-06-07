@@ -1,6 +1,7 @@
 import motor.motor_asyncio
 from datetime import datetime, timedelta
 from uuid import uuid4
+from bson import ObjectId
 
 MONGO_URL = "mongodb+srv://ytube:ytube@cluster0.pck7csy.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 MONGO_DB = "yt_cache"
@@ -13,12 +14,28 @@ collection = client[MONGO_DB][MONGO_COLL]
 key_collection = client[MONGO_DB][MONGO_KEY_COLL]
 log_collection = client[MONGO_DB][MONGO_LOG_COLL]
 
-# Index creation should be run once manually or wrapped in a startup event if desired.
+# --- Serialization Helper ---
+def fix_mongo_document(doc):
+    """Recursively convert ObjectId/datetime in dict/list to str/ISO for FastAPI JSON responses."""
+    if isinstance(doc, list):
+        return [fix_mongo_document(x) for x in doc]
+    if isinstance(doc, dict):
+        newd = {}
+        for k, v in doc.items():
+            if isinstance(v, ObjectId):
+                newd[k] = str(v)
+            elif isinstance(v, datetime):
+                newd[k] = v.isoformat()
+            else:
+                newd[k] = fix_mongo_document(v)
+        return newd
+    return doc
 
 # ----------------- CACHE FILE OPERATIONS -----------------
 
 async def get_cached_file(video_id, ext):
-    return await collection.find_one({"video_id": video_id, "ext": ext})
+    doc = await collection.find_one({"video_id": video_id, "ext": ext})
+    return fix_mongo_document(doc) if doc else None
 
 async def save_cached_file(video_id, ext, message_id=None, file_id=None, status="ready"):
     await collection.update_one(
@@ -28,13 +45,12 @@ async def save_cached_file(video_id, ext, message_id=None, file_id=None, status=
     )
 
 async def set_pending_file(video_id, ext):
-    # Try to atomically set a file as pending if it doesn't already exist
     existing = await collection.find_one({"video_id": video_id, "ext": ext})
     if existing:
         if existing.get("status") == "pending":
-            return False  # Already being processed
+            return False
         if existing.get("status") == "ready":
-            return False  # Already uploaded
+            return False
     await collection.update_one(
         {"video_id": video_id, "ext": ext},
         {"$set": {"status": "pending", "message_id": None, "file_id": None}},
@@ -60,7 +76,8 @@ async def revoke_cached_file(video_id, ext):
 
 async def list_cached_files(limit=50):
     cursor = collection.find().sort([("_id", -1)]).limit(limit)
-    return await cursor.to_list(length=limit)
+    docs = await cursor.to_list(length=limit)
+    return fix_mongo_document(docs)
 
 # ----------------- API KEY OPERATIONS -----------------
 
@@ -81,25 +98,27 @@ async def create_api_key(name, days_valid=30, daily_limit=100, is_admin=False):
         await key_collection.insert_one(api_key)
     except Exception as e:
         raise Exception("API key with this value or id already exists.")
-    return api_key
+    return fix_mongo_document(api_key)
 
 async def revoke_api_key(key_id):
     await key_collection.delete_one({"id": key_id})
 
 async def get_api_key(key):
-    return await key_collection.find_one({"key": key})
+    doc = await key_collection.find_one({"key": key})
+    return fix_mongo_document(doc) if doc else None
 
 async def get_api_key_by_id(key_id):
-    return await key_collection.find_one({"id": key_id})
+    doc = await key_collection.find_one({"id": key_id})
+    return fix_mongo_document(doc) if doc else None
 
 async def list_api_keys():
     cursor = key_collection.find().sort([("created_at", -1)])
-    return await cursor.to_list(length=1000)
+    docs = await cursor.to_list(length=1000)
+    return fix_mongo_document(docs)
 
 # ----------------- LOGGING & LIMITS -----------------
 
 async def log_api_request(api_key, endpoint, status, op=None):
-    # For stats ops, provide counts and stats, not just logging
     now = datetime.utcnow()
     if op == "count_total":
         return await log_collection.count_documents({})
@@ -123,8 +142,8 @@ async def log_api_request(api_key, endpoint, status, op=None):
         return result
     if op == "recent":
         cursor = log_collection.find().sort([("_id", -1)]).limit(50)
-        return await cursor.to_list(length=50)
-    # Normal insert
+        docs = await cursor.to_list(length=50)
+        return fix_mongo_document(docs)
     await log_collection.insert_one({
         "timestamp": now.isoformat(),
         "api_key": api_key,
@@ -146,7 +165,6 @@ async def get_today_count(api_key):
 async def check_api_key(key, endpoint):
     key_obj = await get_api_key(key)
     now = datetime.utcnow()
-    # Log the API request before raising exception
     if not key_obj:
         await log_api_request(key, endpoint, 401)
         raise Exception("Invalid API Key")
