@@ -1,11 +1,11 @@
 import os
 import logging
-import requests
 import asyncio
-from fastapi import FastAPI, Query, Request, HTTPException, Body
-from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Query, Request, HTTPException, Body, BackgroundTasks
+from fastapi.responses import StreamingResponse, HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from ytube_api import Ytube
 from mongocache import (
     get_cached_file, save_cached_file, add_cached_file, revoke_cached_file, list_cached_files,
@@ -17,13 +17,13 @@ import httpx
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-ADMIN_KEY = "XOTIK"
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "XOTIK")
 LOG_FILE = "api_requests.log"
-API_ID = 25193832
-API_HASH = "e154b1ccb0195edec0bc91ae7efebc2f"
-BOT_TOKEN = "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0"
-CACHE_CHANNEL = -1002846625394
-WEB_PORT = 8000
+API_ID = int(os.environ.get("API_ID", 25193832))
+API_HASH = os.environ.get("API_HASH", "e154b1ccb0195edec0bc91ae7efebc2f")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7918404318:AAGxfuRA6VVTPcAdxO0quOWzoVoGGLZ6An0")
+CACHE_CHANNEL = int(os.environ.get("CACHE_CHANNEL", -1002846625394))
+WEB_PORT = int(os.environ.get("WEB_PORT", 8000))
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -33,6 +33,16 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+
+# CORS for speed and safe public API use
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 yt = Ytube()
 templates = Jinja2Templates(directory="templates")
 
@@ -58,11 +68,11 @@ async def ensure_channel_known(client, channel_id):
         try:
             await client.send_message(channel_id, "Initializing channel for bot cache (safe to delete)")
         except Exception as e:
-            print(f"Failed to initialize channel {channel_id}: {e}")
+            logging.error(f"Failed to initialize channel {channel_id}: {e}")
             raise
 
 async def search_cache(video_id, ext):
-    return get_cached_file(video_id, ext)
+    return await get_cached_file(video_id, ext)
 
 async def cache_file_send(file_path, video_id, ext):
     await ensure_pyrogram_running()
@@ -74,7 +84,7 @@ async def cache_file_send(file_path, video_id, ext):
     else:
         sent = await pyro_api.send_video(CACHE_CHANNEL, file_path, caption=caption)
         file_id = sent.video.file_id
-    save_cached_file(video_id, ext, sent.id, file_id)
+    await save_cached_file(video_id, ext, sent.id, file_id)
     return sent
 
 def check_admin_key(request: Request):
@@ -82,19 +92,25 @@ def check_admin_key(request: Request):
     if key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Forbidden: Invalid admin key.")
 
-def check_api_key(request: Request):
-    # MongoDB version, supports all key logic, logging, limits, expiry, admin keys, etc.
+async def check_api_key(request: Request):
     if request.url.path in ["/", "/status", "/", "/admin"]:
         return
     key = request.headers.get("x-api-key")
     if not key:
         key = request.query_params.get("api_key")
     try:
-        # raises Exception with message if invalid, expired, or over limit
-        mongo_check_api_key(key, request.url.path)
+        await mongo_check_api_key(key, request.url.path)
     except Exception as e:
         logging.warning(f"Unauthorized/invalid request from {getattr(request.client, 'host', 'unknown')} : {str(e)}")
         raise HTTPException(status_code=401 if "limit" not in str(e) else 429, detail=str(e))
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logging.error(f"Unhandled Exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error."}
+    )
 
 @app.on_event("startup")
 async def startup_event():
@@ -124,16 +140,14 @@ async def admin_panel(request: Request):
 async def admin_metrics(request: Request):
     check_admin_key(request)
     now = datetime.utcnow()
-    today = now.date()
-    total_requests = log_api_request(None, None, None, op="count_total")
-    today_requests = log_api_request(None, None, None, op="count_today")
-    active_keys = len([k for k in list_api_keys() if datetime.fromisoformat(k['valid_until']) > now])
+    total_requests = await log_api_request(None, None, None, op="count_total")
+    today_requests = await log_api_request(None, None, None, op="count_today")
+    active_keys = len([k for k in await list_api_keys() if datetime.fromisoformat(k['valid_until']) > now])
     error_rate = 0
     if total_requests:
-        error_rate = 100 * log_api_request(None, None, None, op="count_errors") // total_requests
-    # Example daily_requests and key_distribution
-    daily_requests = log_api_request(None, None, None, op="daily_requests")
-    key_distribution = {k['name']: get_today_count(k['key']) for k in list_api_keys()}
+        error_rate = 100 * await log_api_request(None, None, None, op="count_errors") // total_requests
+    daily_requests = await log_api_request(None, None, None, op="daily_requests")
+    key_distribution = {k['name']: await get_today_count(k['key']) for k in await list_api_keys()}
     return {
         "total_requests": total_requests,
         "today_requests": today_requests,
@@ -147,20 +161,20 @@ async def admin_metrics(request: Request):
 async def admin_list_api_keys(request: Request):
     check_admin_key(request)
     now = datetime.utcnow()
-    keys = list_api_keys()
+    keys = await list_api_keys()
     for k in keys:
-        k['count'] = get_today_count(k['key'])
+        k['count'] = await get_today_count(k['key'])
     return keys
 
 @app.get("/admin/recent_logs")
 async def admin_recent_logs(request: Request):
     check_admin_key(request)
-    return log_api_request(None, None, None, op="recent")
+    return await log_api_request(None, None, None, op="recent")
 
 @app.post("/admin/create_api_key")
 async def admin_create_api_key(request: Request, data: dict = Body(...)):
     check_admin_key(request)
-    key_doc = create_api_key(
+    key_doc = await create_api_key(
         name=data.get("name", "unnamed"),
         days_valid=data.get("days_valid", 30),
         daily_limit=data.get("daily_limit", 100),
@@ -171,14 +185,14 @@ async def admin_create_api_key(request: Request, data: dict = Body(...)):
 @app.post("/admin/revoke_api_key")
 async def admin_revoke_api_key(request: Request, data: dict = Body(...)):
     check_admin_key(request)
-    revoke_api_key(data["id"])
+    await revoke_api_key(data["id"])
     return {"status": "ok"}
 
 # --- API CORE ENDPOINTS ---
 
 @app.get("/search")
 async def search(request: Request, q: str = Query(...)):
-    check_api_key(request)
+    await check_api_key(request)
     results = yt.search_videos(q)
     if not results.items:
         return {"error": "No results found"}
@@ -190,8 +204,8 @@ async def search(request: Request, q: str = Query(...)):
     if not title:
         title = video_id
     base = str(request.base_url).rstrip("/")
-    audio_stream = f"{base}/download/audio?video_id={video_id}&api_key="
-    video_stream = f"{base}/download/video?video_id={video_id}&api_key="
+    audio_stream = f"{base}/download/audio?video_id={video_id}"
+    video_stream = f"{base}/download/video?video_id={video_id}"
     return {
         "id": video_id,
         "title": title,
@@ -201,8 +215,8 @@ async def search(request: Request, q: str = Query(...)):
     }
 
 @app.get("/download/audio")
-async def download_audio(request: Request, video_id: str = Query(...)):
-    check_api_key(request)
+async def download_audio(request: Request, video_id: str = Query(...), background_tasks: BackgroundTasks = None):
+    await check_api_key(request)
     results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
     if not results.items:
         raise HTTPException(status_code=404, detail="No audio link found")
@@ -225,25 +239,28 @@ async def download_audio(request: Request, video_id: str = Query(...)):
     download_link = yt.get_download_link(item, format="mp3", quality="320")
     if not download_link or not getattr(download_link, 'url', None):
         raise HTTPException(status_code=404, detail="No audio link found")
-    resp = requests.get(download_link.url, stream=True)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=500, detail="Failed to fetch audio stream")
-    os.makedirs("downloads", exist_ok=True)
-    file_path = f"downloads/{video_id}_new.mp3"
-    with open(file_path, "wb") as f:
-        for chunk in resp.iter_content(4096):
-            f.write(chunk)
-    await cache_file_send(file_path, video_id, "mp3")
-    headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp3"'}
-    def iterfile():
-        with open(file_path, "rb") as f:
-            while chunk := f.read(4096):
-                yield chunk
-    return StreamingResponse(iterfile(), media_type="audio/mpeg", headers=headers)
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.get(download_link.url)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to fetch audio stream")
+        os.makedirs("downloads", exist_ok=True)
+        file_path = f"downloads/{video_id}_new.mp3"
+        with open(file_path, "wb") as f:
+            f.write(resp.content)
+        if background_tasks:
+            background_tasks.add_task(cache_file_send, file_path, video_id, "mp3")
+        else:
+            await cache_file_send(file_path, video_id, "mp3")
+        headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp3"'}
+        def iterfile():
+            with open(file_path, "rb") as f:
+                while chunk := f.read(4096):
+                    yield chunk
+        return StreamingResponse(iterfile(), media_type="audio/mpeg", headers=headers)
 
 @app.get("/download/video")
-async def download_video(request: Request, video_id: str = Query(...)):
-    check_api_key(request)
+async def download_video(request: Request, video_id: str = Query(...), background_tasks: BackgroundTasks = None):
+    await check_api_key(request)
     results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
     if not results.items:
         raise HTTPException(status_code=404, detail="No video link found")
@@ -266,25 +283,28 @@ async def download_video(request: Request, video_id: str = Query(...)):
     download_link = yt.get_download_link(item, format="mp4", quality="360")
     if not download_link or not getattr(download_link, 'url', None):
         raise HTTPException(status_code=404, detail="No video link found")
-    resp = requests.get(download_link.url, stream=True)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=500, detail="Failed to fetch video stream")
-    os.makedirs("downloads", exist_ok=True)
-    file_path = f"downloads/{video_id}_new.mp4"
-    with open(file_path, "wb") as f:
-        for chunk in resp.iter_content(4096):
-            f.write(chunk)
-    await cache_file_send(file_path, video_id, "mp4")
-    headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp4"'}
-    def iterfile():
-        with open(file_path, "rb") as f:
-            while chunk := f.read(4096):
-                yield chunk
-    return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
+    async with httpx.AsyncClient(timeout=180) as client:
+        resp = await client.get(download_link.url)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=500, detail="Failed to fetch video stream")
+        os.makedirs("downloads", exist_ok=True)
+        file_path = f"downloads/{video_id}_new.mp4"
+        with open(file_path, "wb") as f:
+            f.write(resp.content)
+        if background_tasks:
+            background_tasks.add_task(cache_file_send, file_path, video_id, "mp4")
+        else:
+            await cache_file_send(file_path, video_id, "mp4")
+        headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp4"'}
+        def iterfile():
+            with open(file_path, "rb") as f:
+                while chunk := f.read(4096):
+                    yield chunk
+        return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
 
 # Telegram Bot Section (unchanged but required for full function)
 async def search_cache_bot(video_id, ext):
-    return get_cached_file(video_id, ext)
+    return await get_cached_file(video_id, ext)
 
 @bot_app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
@@ -315,11 +335,11 @@ async def song_handler(client: Client, message: Message):
     title = video_id
     try:
         async with httpx.AsyncClient(timeout=10) as client2:
-            r = await client2.get(f"http://127.0.0.1:{WEB_PORT}/search", params={"q": video_id, "api_key": ""})
+            r = await client2.get(f"http://127.0.0.1:{WEB_PORT}/search", params={"q": video_id})
             if r.status_code == 200 and "title" in r.json():
                 title = r.json()["title"]
     except Exception as e:
-        print(f"[bot /song] search error: {e}")
+        logging.error(f"[bot /song] search error: {e}")
 
     cached_msg = await search_cache_bot(video_id, "mp3")
     if cached_msg and "file_id" in cached_msg:
@@ -331,7 +351,7 @@ async def song_handler(client: Client, message: Message):
         try:
             r = await client3.get(
                 f"http://127.0.0.1:{WEB_PORT}/download/audio",
-                params={"video_id": video_id, "api_key": ""}
+                params={"video_id": video_id}
             )
             if r.status_code == 200:
                 os.makedirs("downloads", exist_ok=True)
@@ -339,7 +359,7 @@ async def song_handler(client: Client, message: Message):
                 with open(file_path, "wb") as f:
                     f.write(r.content)
                 sent = await client.send_audio(CACHE_CHANNEL, file_path, caption=make_caption(video_id, "mp3"))
-                save_cached_file(video_id, "mp3", sent.id, sent.audio.file_id)
+                await save_cached_file(video_id, "mp3", sent.id, sent.audio.file_id)
                 await message.reply_audio(sent.audio.file_id, caption=f"🎵 {title}\n(Downloaded and cached)")
                 os.remove(file_path)
                 return
@@ -347,11 +367,11 @@ async def song_handler(client: Client, message: Message):
                 await message.reply("API download failed.")
         except Exception as e:
             await message.reply("Failed to download and send audio.")
-            print(f"[bot /song] download error: {e}")
+            logging.error(f"[bot /song] download error: {e}")
 
 async def run_bot():
     await bot_app.start()
-    print("Bot started!")
+    logging.info("Bot started!")
     await bot_app.idle()
 
 if __name__ == "__main__":
