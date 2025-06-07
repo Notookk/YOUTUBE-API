@@ -16,6 +16,7 @@ from pyrogram.types import Message
 import httpx
 from datetime import datetime, timedelta
 from uuid import uuid4
+from bson import ObjectId
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "XOTIK")
 LOG_FILE = "api_requests.log"
@@ -51,6 +52,24 @@ if os.path.isdir("static"):
 
 pyro_api = Client("api-helper", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 bot_app = Client("music-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# --- Serialization Helper ---
+def fix_mongo_document(doc):
+    """Recursively convert ObjectId/datetime in dict/list to str/ISO for FastAPI JSON responses."""
+    if isinstance(doc, list):
+        return [fix_mongo_document(x) for x in doc]
+    if isinstance(doc, dict):
+        from datetime import datetime as dt
+        newd = {}
+        for k, v in doc.items():
+            if isinstance(v, ObjectId):
+                newd[k] = str(v)
+            elif isinstance(v, dt):
+                newd[k] = v.isoformat()
+            else:
+                newd[k] = fix_mongo_document(v)
+        return newd
+    return doc
 
 # --- Helpers ---
 def make_caption(video_id, ext):
@@ -142,13 +161,14 @@ async def admin_metrics(request: Request):
     now = datetime.utcnow()
     total_requests = await log_api_request(None, None, None, op="count_total")
     today_requests = await log_api_request(None, None, None, op="count_today")
-    active_keys = len([k for k in await list_api_keys() if datetime.fromisoformat(k['valid_until']) > now])
+    keys = await list_api_keys()
+    active_keys = len([k for k in keys if datetime.fromisoformat(k['valid_until']) > now])
     error_rate = 0
     if total_requests:
         error_rate = 100 * await log_api_request(None, None, None, op="count_errors") // total_requests
     daily_requests = await log_api_request(None, None, None, op="daily_requests")
-    key_distribution = {k['name']: await get_today_count(k['key']) for k in await list_api_keys()}
-    return {
+    key_distribution = {k['name']: await get_today_count(k['key']) for k in keys}
+    metrics = {
         "total_requests": total_requests,
         "today_requests": today_requests,
         "active_keys": active_keys,
@@ -156,6 +176,7 @@ async def admin_metrics(request: Request):
         "daily_requests": daily_requests,
         "key_distribution": key_distribution,
     }
+    return fix_mongo_document(metrics)
 
 @app.get("/admin/list_api_keys")
 async def admin_list_api_keys(request: Request):
@@ -164,12 +185,13 @@ async def admin_list_api_keys(request: Request):
     keys = await list_api_keys()
     for k in keys:
         k['count'] = await get_today_count(k['key'])
-    return keys
+    return fix_mongo_document(keys)
 
 @app.get("/admin/recent_logs")
 async def admin_recent_logs(request: Request):
     check_admin_key(request)
-    return await log_api_request(None, None, None, op="recent")
+    logs = await log_api_request(None, None, None, op="recent")
+    return fix_mongo_document(logs)
 
 @app.post("/admin/create_api_key")
 async def admin_create_api_key(request: Request, data: dict = Body(...)):
