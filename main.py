@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from ytube_api import Ytube
 from mongocache import (
     get_cached_file, save_cached_file, add_cached_file, revoke_cached_file, list_cached_files,
-    create_api_key, revoke_api_key, get_api_key, list_api_keys, log_api_request, get_today_count, check_api_key as mongo_check_api_key, set_pending_file
+    create_api_key, revoke_api_key, get_api_key, list_api_keys, log_api_request, get_today_count,
+    check_api_key as mongo_check_api_key, set_pending_file
 )
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -17,6 +18,7 @@ import httpx
 from datetime import datetime, timedelta
 from uuid import uuid4
 from bson import ObjectId
+import traceback
 
 ADMIN_KEY = "XOTIK"
 LOG_FILE = "api_requests.log"
@@ -35,7 +37,6 @@ logging.basicConfig(
 
 app = FastAPI()
 
-# CORS for speed and safe public API use
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -53,9 +54,7 @@ if os.path.isdir("static"):
 pyro_api = Client("api-helper", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 bot_app = Client("music-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# --- Serialization Helper ---
 def fix_mongo_document(doc):
-    """Recursively convert ObjectId/datetime in dict/list to str/ISO for FastAPI JSON responses."""
     if isinstance(doc, list):
         return [fix_mongo_document(x) for x in doc]
     if isinstance(doc, dict):
@@ -71,14 +70,8 @@ def fix_mongo_document(doc):
         return newd
     return doc
 
-# --- Helpers ---
 def make_caption(video_id, ext):
     return f"yt_{video_id}_{ext}"
-
-async def ensure_pyrogram_running():
-    if not pyro_api.is_connected:
-        await pyro_api.start()
-        await asyncio.sleep(2)
 
 async def ensure_channel_known(client, channel_id):
     try:
@@ -94,17 +87,25 @@ async def search_cache(video_id, ext):
     return await get_cached_file(video_id, ext)
 
 async def cache_file_send(file_path, video_id, ext):
-    await ensure_pyrogram_running()
     await ensure_channel_known(pyro_api, CACHE_CHANNEL)
     caption = make_caption(video_id, ext)
-    if ext == "mp3":
-        sent = await pyro_api.send_audio(CACHE_CHANNEL, file_path, caption=caption)
-        file_id = sent.audio.file_id
-    else:
-        sent = await pyro_api.send_video(CACHE_CHANNEL, file_path, caption=caption)
-        file_id = sent.video.file_id
-    await save_cached_file(video_id, ext, sent.id, file_id, status="ready")
-    return sent
+    try:
+        if ext == "mp3":
+            sent = await pyro_api.send_audio(CACHE_CHANNEL, file_path, caption=caption)
+            file_id = sent.audio.file_id
+        else:
+            sent = await pyro_api.send_video(CACHE_CHANNEL, file_path, caption=caption)
+            file_id = sent.video.file_id
+        await save_cached_file(video_id, ext, sent.id, file_id, status="ready")
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return sent
+    except Exception as e:
+        await save_cached_file(video_id, ext, None, None, status="error")
+        logging.error(f"Failed to send file to telegram: {e}")
+        traceback.print_exc()
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 def check_admin_key(request: Request):
     key = request.query_params.get("admin_key")
@@ -125,7 +126,7 @@ async def check_api_key(request: Request):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    logging.error(f"Unhandled Exception: {exc}")
+    logging.error(f"Unhandled Exception: {exc}\n{traceback.format_exc()}")
     return JSONResponse(
         status_code=500,
         content={"error": "Internal server error."}
@@ -133,7 +134,7 @@ async def global_exception_handler(request, exc):
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(pyro_api.start())
+    await pyro_api.start()
     await asyncio.sleep(2)
     asyncio.create_task(run_bot())
 
@@ -154,7 +155,6 @@ async def admin_panel(request: Request):
     except HTTPException:
         return RedirectResponse(url="/")
 
-# --- ADMIN ENDPOINTS FOR DASHBOARD ---
 @app.get("/admin/metrics")
 async def admin_metrics(request: Request):
     check_admin_key(request)
@@ -210,8 +210,6 @@ async def admin_revoke_api_key(request: Request, data: dict = Body(...)):
     await revoke_api_key(data["id"])
     return {"status": "ok"}
 
-# --- API CORE ENDPOINTS ---
-
 @app.get("/search")
 async def search(request: Request, q: str = Query(...)):
     await check_api_key(request)
@@ -247,9 +245,17 @@ async def download_audio(request: Request, video_id: str = Query(...), backgroun
                 cached = await search_cache(video_id, "mp3")
                 if cached and cached.get("status") == "ready" and "message_id" in cached:
                     break
+                if cached and cached.get("status") == "error":
+                    break
             else:
-                raise HTTPException(status_code=423, detail="File is being processed. Try again soon.")
-        if cached.get("status") == "ready" and "message_id" in cached:
+                raise HTTPException(
+                    status_code=423,
+                    detail="File is being processed. Try again soon.",
+                    headers={"Retry-After": "5"}
+                )
+        if cached.get("status") == "error":
+            await revoke_cached_file(video_id, "mp3")
+        elif cached.get("status") == "ready" and "message_id" in cached:
             try:
                 os.makedirs("downloads", exist_ok=True)
                 file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
@@ -294,38 +300,52 @@ async def download_audio(request: Request, video_id: str = Query(...), backgroun
                         while chunk := f.read(4096):
                             yield chunk
                 return StreamingResponse(iterfile(), media_type="audio/mpeg", headers=headers)
-        raise HTTPException(status_code=423, detail="File is being processed. Try again soon.")
-    results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
-    if not results.items:
-        await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
-        raise HTTPException(status_code=404, detail="No audio link found")
-    item = results.items[0]
-    title = getattr(item, "title", None) or (item["title"] if isinstance(item, dict) and "title" in item else None)
-    if not title:
-        title = video_id
-    download_link = yt.get_download_link(item, format="mp3", quality="320")
-    if not download_link or not getattr(download_link, 'url', None):
-        await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
-        raise HTTPException(status_code=404, detail="No audio link found")
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.get(download_link.url)
-        if resp.status_code != 200:
-            await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
-            raise HTTPException(status_code=500, detail="Failed to fetch audio stream")
-        os.makedirs("downloads", exist_ok=True)
-        file_path = f"downloads/{video_id}_new.mp3"
-        with open(file_path, "wb") as f:
-            f.write(resp.content)
-        if background_tasks:
-            background_tasks.add_task(cache_file_send, file_path, video_id, "mp3")
+            if cached and cached.get("status") == "error":
+                break
         else:
-            await cache_file_send(file_path, video_id, "mp3")
-        headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp3"'}
-        def iterfile():
-            with open(file_path, "rb") as f:
-                while chunk := f.read(4096):
-                    yield chunk
-        return StreamingResponse(iterfile(), media_type="audio/mpeg", headers=headers)
+            raise HTTPException(
+                status_code=423,
+                detail="File is being processed. Try again soon.",
+                headers={"Retry-After": "5"}
+            )
+        if cached and cached.get("status") == "error":
+            await revoke_cached_file(video_id, "mp3")
+    try:
+        results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
+        if not results.items:
+            await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
+            raise HTTPException(status_code=404, detail="No audio link found")
+        item = results.items[0]
+        title = getattr(item, "title", None) or (item["title"] if isinstance(item, dict) and "title" in item else None)
+        if not title:
+            title = video_id
+        download_link = yt.get_download_link(item, format="mp3", quality="320")
+        if not download_link or not getattr(download_link, 'url', None):
+            await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
+            raise HTTPException(status_code=404, detail="No audio link found")
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.get(download_link.url)
+            if resp.status_code != 200:
+                await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
+                raise HTTPException(status_code=500, detail="Failed to fetch audio stream")
+            os.makedirs("downloads", exist_ok=True)
+            file_path = f"downloads/{video_id}_new.mp3"
+            with open(file_path, "wb") as f:
+                f.write(resp.content)
+            if background_tasks:
+                background_tasks.add_task(cache_file_send, file_path, video_id, "mp3")
+            else:
+                await cache_file_send(file_path, video_id, "mp3")
+            headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp3"'}
+            def iterfile():
+                with open(file_path, "rb") as f:
+                    while chunk := f.read(4096):
+                        yield chunk
+            return StreamingResponse(iterfile(), media_type="audio/mpeg", headers=headers)
+    except Exception as e:
+        await save_cached_file(video_id, "mp3", message_id=None, file_id=None, status="error")
+        logging.error(f"Error in download_audio: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
 @app.get("/download/video")
 async def download_video(request: Request, video_id: str = Query(...), background_tasks: BackgroundTasks = None):
@@ -338,9 +358,17 @@ async def download_video(request: Request, video_id: str = Query(...), backgroun
                 cached = await search_cache(video_id, "mp4")
                 if cached and cached.get("status") == "ready" and "message_id" in cached:
                     break
+                if cached and cached.get("status") == "error":
+                    break
             else:
-                raise HTTPException(status_code=423, detail="File is being processed. Try again soon.")
-        if cached.get("status") == "ready" and "message_id" in cached:
+                raise HTTPException(
+                    status_code=423,
+                    detail="File is being processed. Try again soon.",
+                    headers={"Retry-After": "5"}
+                )
+        if cached.get("status") == "error":
+            await revoke_cached_file(video_id, "mp4")
+        elif cached.get("status") == "ready" and "message_id" in cached:
             try:
                 os.makedirs("downloads", exist_ok=True)
                 file = await pyro_api.get_messages(CACHE_CHANNEL, cached["message_id"])
@@ -385,40 +413,53 @@ async def download_video(request: Request, video_id: str = Query(...), backgroun
                         while chunk := f.read(4096):
                             yield chunk
                 return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
-        raise HTTPException(status_code=423, detail="File is being processed. Try again soon.")
-    results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
-    if not results.items:
-        await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
-        raise HTTPException(status_code=404, detail="No video link found")
-    item = results.items[0]
-    title = getattr(item, "title", None) or (item["title"] if isinstance(item, dict) and "title" in item else None)
-    if not title:
-        title = video_id
-    download_link = yt.get_download_link(item, format="mp4", quality="360")
-    if not download_link or not getattr(download_link, 'url', None):
-        await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
-        raise HTTPException(status_code=404, detail="No video link found")
-    async with httpx.AsyncClient(timeout=180) as client:
-        resp = await client.get(download_link.url)
-        if resp.status_code != 200:
-            await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
-            raise HTTPException(status_code=500, detail="Failed to fetch video stream")
-        os.makedirs("downloads", exist_ok=True)
-        file_path = f"downloads/{video_id}_new.mp4"
-        with open(file_path, "wb") as f:
-            f.write(resp.content)
-        if background_tasks:
-            background_tasks.add_task(cache_file_send, file_path, video_id, "mp4")
+            if cached and cached.get("status") == "error":
+                break
         else:
-            await cache_file_send(file_path, video_id, "mp4")
-        headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp4"'}
-        def iterfile():
-            with open(file_path, "rb") as f:
-                while chunk := f.read(4096):
-                    yield chunk
-        return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
+            raise HTTPException(
+                status_code=423,
+                detail="File is being processed. Try again soon.",
+                headers={"Retry-After": "5"}
+            )
+        if cached and cached.get("status") == "error":
+            await revoke_cached_file(video_id, "mp4")
+    try:
+        results = yt.search_videos(f"https://www.youtube.com/watch?v={video_id}")
+        if not results.items:
+            await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
+            raise HTTPException(status_code=404, detail="No video link found")
+        item = results.items[0]
+        title = getattr(item, "title", None) or (item["title"] if isinstance(item, dict) and "title" in item else None)
+        if not title:
+            title = video_id
+        download_link = yt.get_download_link(item, format="mp4", quality="360")
+        if not download_link or not getattr(download_link, 'url', None):
+            await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
+            raise HTTPException(status_code=404, detail="No video link found")
+        async with httpx.AsyncClient(timeout=180) as client:
+            resp = await client.get(download_link.url)
+            if resp.status_code != 200:
+                await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
+                raise HTTPException(status_code=500, detail="Failed to fetch video stream")
+            os.makedirs("downloads", exist_ok=True)
+            file_path = f"downloads/{video_id}_new.mp4"
+            with open(file_path, "wb") as f:
+                f.write(resp.content)
+            if background_tasks:
+                background_tasks.add_task(cache_file_send, file_path, video_id, "mp4")
+            else:
+                await cache_file_send(file_path, video_id, "mp4")
+            headers = {"Content-Disposition": f'attachment; filename="{video_id}.mp4"'}
+            def iterfile():
+                with open(file_path, "rb") as f:
+                    while chunk := f.read(4096):
+                        yield chunk
+            return StreamingResponse(iterfile(), media_type="video/mp4", headers=headers)
+    except Exception as e:
+        await save_cached_file(video_id, "mp4", message_id=None, file_id=None, status="error")
+        logging.error(f"Error in download_video: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
-# Telegram Bot Section (unchanged but required for full function)
 async def search_cache_bot(video_id, ext):
     return await get_cached_file(video_id, ext)
 
